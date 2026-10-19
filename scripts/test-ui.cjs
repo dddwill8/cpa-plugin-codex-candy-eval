@@ -543,6 +543,7 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
       on:['old-model','xai/grok-4.7'], off:['xai/grok-4.7'], down:['kept-bare'], busy:['xai/grok-4.7'], paren:['codex-auto-review(high)','claude-sonnet']
     };
     var healthModelReads = {};
+    var healthGates = null;
     api = async (path, options = {}) => {
       if (String(path).includes('/auth-files/models')) {
         const name = decodeURIComponent(String(path).split('name=')[1]);
@@ -552,8 +553,11 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
       }
       extendCalls.push([path, options.body]);
       if (String(path).endsWith('/health/run')) {
-        if (options.body?.all_models) return {results:[{credential_id:'on',model:'xai/grok-4.7',passed:true,text:'hi'},{credential_id:'on',model:'kept-bare',passed:false,error:'第二个模型失败'}]};
-        return {results:[{credential_id:'on',model:'xai/grok-4.7',passed:true,text:'hi'},{credential_id:'paren',passed:false,error:'没有可用模型'}]};
+        const id = options.body.credential_ids[0];
+        const model = options.body.models[id];
+        if (healthGates) await new Promise((resolve) => healthGates.push({ id, model, resolve }));
+        const failed = id === 'paren' && model === 'claude-sonnet';
+        return {results:[{credential_id:id, model, passed:!failed, error: failed ? '没有可用模型' : ''}]};
       }
       return {started:1};
     }`);
@@ -597,14 +601,13 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.equal(pelicanPosts[0][1].runs, undefined);
   assert.equal(pelicanPosts[0][1].model, undefined);
   const healthPosts = await posted('health-run');
-  assert.equal(healthPosts.length, 1);
-  assert.equal(String(healthPosts[0][0]).endsWith('/health/run'), true);
-  assert.deepEqual(healthPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
-  assert.equal(healthPosts[0][1].models.on, 'xai/grok-4.7');
-  assert.equal(healthPosts[0][1].model_catalog.on.includes('old-model'), false);
-  assert.equal(healthPosts[0][1].models.paren, 'claude-sonnet');
-  assert.equal(healthPosts[0][1].all_models, false);
-  assert.equal(healthPosts[0][1].models.off, undefined);
+  assert.equal(healthPosts.length, 4);
+  assert.equal(healthPosts.every((call) => String(call[0]).endsWith('/health/run') && call[1].credential_ids.length === 1), true);
+  const onPost = healthPosts.find((call) => call[1].credential_ids[0] === 'on');
+  assert.equal(onPost[1].models.on, 'xai/grok-4.7');
+  assert.equal(onPost[1].model_catalog.on.includes('old-model'), false);
+  assert.equal(healthPosts.find((call) => call[1].credential_ids[0] === 'paren')[1].models.paren, 'claude-sonnet');
+  assert.equal(healthPosts.some((call) => call[1].credential_ids[0] === 'off'), false);
   const healthHTML = element('health-results').innerHTML;
   assert.match(healthHTML, /On[\s\S]*health-status[\s\S]*通过/);
   assert.match(healthHTML, /Paren[\s\S]*health-status[\s\S]*不通过/);
@@ -613,15 +616,32 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   run(`toggleHealth('paren')`);
   assert.match(element('health-results').innerHTML, /health-error[\s\S]*没有可用模型/);
   const allPosts = await posted('health-run-all');
-  assert.equal(allPosts.length, 1);
-  assert.equal(allPosts[0][1].all_models, true);
-  assert.deepEqual(allPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
-  run(`toggleHealth('on')`);
+  assert.equal(allPosts.filter((call) => call[1].credential_ids[0] === 'paren').map((call) => call[1].models.paren).sort().join(','), 'claude-sonnet,codex-auto-review(high)');
+  assert.equal(allPosts.some((call) => call[1].credential_ids[0] === 'off'), false);
+  run(`healthOpen.delete('paren'); toggleHealth('paren')`);
   const allHTML = element('health-results').innerHTML;
-  assert.match(allHTML, /xai\/grok-4\.7/);
-  assert.match(allHTML, /kept-bare/);
-  assert.match(allHTML, /第二个模型失败/);
+  assert.match(allHTML, /claude-sonnet/);
+  assert.match(allHTML, /codex-auto-review\(high\)/);
+  assert.match(allHTML, /没有可用模型/);
   assert.match(allHTML, /不通过 1\/2/);
+  run(`healthGates = []`);
+  const live = element('health-run').listeners.click();
+  for (let i = 0; i < 20 && run(`healthGates.length`) < 1; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(run(`healthGates.length`) >= 1, true);
+  run(`healthGates[0].resolve()`);
+  for (let i = 0; i < 30 && !/verdict (?:ok|bad)/.test(element('health-results').innerHTML); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  const liveHTML = element('health-results').innerHTML;
+  assert.match(liveHTML, /verdict (?:ok|bad)/);
+  assert.equal(liveHTML.includes('检测中'), true);
+  run(`healthGates.splice(0).forEach((gate) => gate.resolve())`);
+  await live;
+  run(`hideHealthCredential('down')`);
+  const hiddenHTML = element('health-results').innerHTML;
+  assert.equal(hiddenHTML.split('<details')[0].includes('data-health-toggle="down"'), false);
+  assert.match(hiddenHTML, /data-health-restore="down"/);
+  assert.match(hiddenHTML, /已隐藏 1 张凭证/);
+  run(`restoreHealthCredential('down')`);
+  assert.equal(element('health-results').innerHTML.split('<details')[0].includes('data-health-toggle="down"'), true);
   const savedHealth = run(`stored('cpa-codex-candy-eval.health.v1')`);
   assert.equal(savedHealth.results.some((result) => result.credential_id === 'on' && result.passed), true);
   run(`healthResults = []; renderHealth()`);
@@ -629,7 +649,9 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   run(`restoreHealthResults(); renderHealth()`);
   assert.match(element('health-results').innerHTML, /通过/);
   const healthCSS = webFile('extend.css');
-  assert.match(healthCSS, /--health-columns:\s*minmax\(0, 1\.4fr\) minmax\(180px, 1fr\) 148px/);
+  assert.match(healthCSS, /--health-columns:\s*96px minmax\(0, 1\.4fr\) minmax\(180px, 1fr\) 148px/);
+  assert.match(healthCSS, /\.health-hide \{[^}]*width:\s*96px/);
+  assert.match(element('health-results').innerHTML, /data-health-hide="on"[^>]*>取消并隐藏/);
   assert.match(healthCSS, /\.health-row, \.health-model-line \{[^}]*grid-template-columns:\s*var\(--health-columns\)/);
   assert.equal(healthHTML.includes('credential_id'), false);
   run(`candySelected.add('a'); fingerprintSelected.add('a'); fingerprintExpanded.add('a'); showLogin('Expired')`);
