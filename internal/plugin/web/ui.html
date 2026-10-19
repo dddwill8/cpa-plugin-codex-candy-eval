@@ -48,7 +48,7 @@
         </div>
         <form id="toolbar" class="card toolbar">
           <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="model"></select></span></label>
-          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="effort" data-tip="none：不指定推理强度，由 CPA 决定；其他强度是否可用由 CPA 或上游判断"></select></span></label>
+          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="effort"></select></span></label>
           <label class="field"><span class="field-label">每凭证次数</span><input id="runs" class="mono" type="number" min="1" max="10" step="1" value="1" required></label>
           <button id="run-batch" class="btn" type="submit" disabled>测试全部</button>
         </form>
@@ -96,7 +96,7 @@
         </div>
         <form id="pl-toolbar" class="card toolbar">
           <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="pl-model"></select></span></label>
-          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pl-effort" data-tip="none：不指定推理强度，由 CPA 决定；其他强度是否可用由 CPA 或上游判断"></select></span></label>
+          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pl-effort"></select></span></label>
           <button id="pl-run-batch" class="btn" type="submit" disabled>测试全部</button>
         </form>
         <div class="legend"><span>每个凭证 1 次请求（失败或没有 HTML 时重试）</span></div>
