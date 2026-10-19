@@ -42,7 +42,7 @@ func TestPelicanRun(t *testing.T) {
 		t.Fatalf("run: %s", response.Body)
 	}
 	tasks.Wait()
-	page, tool := pelicanResults["page"][0], pelicanResults["tool"][0]
+	page, tool := records.Pelicans["page"][0], records.Pelicans["tool"][0]
 	// A turn that only calls a tool is asked again.
 	if page.HTML != "<svg></svg>" || page.Error != "" || page.Attempts != 1 || page.OutputTokens != 3 || tool.HTML != "" || tool.Error != "模型调用了工具，没有直接回答" || tool.Attempts != modelAttempts {
 		t.Fatalf("page = %+v, tool = %+v", page, tool)
@@ -51,13 +51,13 @@ func TestPelicanRun(t *testing.T) {
 	if state := stateResponse(); bytes.Contains(state.Body, []byte("svg")) || !bytes.Contains(state.Body, []byte(page.ID)) {
 		t.Fatalf("state = %s", state.Body)
 	}
-	var record pelicanResult
-	if err := json.Unmarshal(recordResponse("pelican", url.Values{"auth_id": {"page"}, "id": {page.ID}}).Body, &record); err != nil || record.HTML != page.HTML {
-		t.Fatalf("record = %+v, %v", record, err)
+	var full pelicanRecord
+	if err := json.Unmarshal(recordResponse("pelican", url.Values{"credential_id": {"page"}, "id": {page.ID}}).Body, &full); err != nil || full.HTML != page.HTML {
+		t.Fatalf("record = %+v, %v", full, err)
 	}
-	pelicanResults, loaded = map[string][]pelicanResult{}, false
+	records, loaded = emptyState(), false
 	loadState()
-	if len(pelicanResults["page"]) != 1 || pelicanResults["page"][0].HTML != page.HTML {
+	if len(records.Pelicans["page"]) != 1 || records.Pelicans["page"][0].HTML != page.HTML {
 		t.Fatal("pelican history did not survive reload")
 	}
 }

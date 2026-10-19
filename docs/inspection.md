@@ -106,14 +106,14 @@ python3 ~/cpa-inspection/inspection.py
 
 以下请求使用 CPA 管理认证：`Authorization: Bearer <管理密钥>`，路径前缀为 `<CPA 地址>/v0/management`。
 
-- `GET /plugins/cpa-codex-candy-eval/state`：返回 `auths`，包含凭证 `id`、`name`、`email`、`source`、`priority`、`plan_type`，以及糖果测试的 `running` 进度和 `results` 历史。
-- `POST /plugins/cpa-codex-candy-eval/run`：按凭证 ID 发起糖果测试，返回 `started`。首测 `runs=1`，复测 `runs=2`。
+- `GET /plugins/cpa-codex-candy-eval/state`：返回 `credentials`，包含凭证 `id`、`name`、`email`、`source`、`priority`、`plan_type`，正在进行的测试 `running`（`test` 为 `candy` 时是糖果测试），以及糖果测试记录 `candies`。每条记录有 `id`、`model`、`effort` 和 `status`：`correct` 答对、`wrong` 答错、`failed` 请求失败、`skipped` 已跳过。
+- `POST /plugins/cpa-codex-candy-eval/candy/run`：按凭证 ID 发起糖果测试，返回 `started`。首测 `runs=1`，复测 `runs=2`。
 - `PATCH /auth-files/fields`：修改认证文件的 priority。
 
 糖果测试请求示例：
 
 ```json
-{"auth_ids":["<凭证 ID>"],"model":"gpt-6.1-sol","effort":"low","runs":1}
+{"credential_ids":["<凭证 ID>"],"model":"gpt-6.1-sol","effort":"low","runs":1}
 ```
 
 调整 priority 的请求示例：
@@ -122,4 +122,4 @@ python3 ~/cpa-inspection/inspection.py
 {"name":"<认证文件名>","priority":99}
 ```
 
-脚本轮询 `/state`，等待所选账号的 `running` 结束，再读取本轮新增且模型、推理强度一致的记录。只有记录数量完整、没有错误或跳过标记时，答题结果才参与判定。
+脚本轮询 `/state`，等待所选账号的糖果测试结束，再读取本轮新增且模型、推理强度一致的记录。只有记录数量完整、状态都是答对或答错时，答题结果才参与判定。

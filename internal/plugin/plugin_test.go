@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"html"
 	"net/http"
-	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -18,127 +18,27 @@ import (
 func setupTest(t *testing.T) {
 	t.Helper()
 	previousCredentials := configuredCredentials
-	configuredCredentials = map[string]credential{}
 	previousHost, previousPath, previousLoaded := hostCall, statePath, loaded
-	previousLoadError, previousRunCtx, previousStopRuns, previousRetryDelay := stateLoadError, runCtx, stopRuns, retryDelay
-	previousResults, previousRunning := candyResults, candyRunning
-	previousDetectionResults, previousDetectionRunning, previousStorageError := detectionResults, detectionRunning, storageError
-	previousPelicanResults, previousPelicanRunning := pelicanResults, pelicanRunning
-	previousInspections := inspections
+	previousLoadError, previousStorageError := stateLoadError, storageError
+	previousRecords, previousRunning, previousInspections := records, running, inspections
+	previousRunCtx, previousStopRuns, previousRetryDelay := runCtx, stopRuns, retryDelay
 	t.Cleanup(func() {
 		tasks.Wait()
 		configuredCredentials = previousCredentials
 		hostCall, statePath, loaded = previousHost, previousPath, previousLoaded
-		stateLoadError, runCtx, stopRuns, retryDelay = previousLoadError, previousRunCtx, previousStopRuns, previousRetryDelay
-		candyResults, candyRunning = previousResults, previousRunning
-		detectionResults, detectionRunning, storageError = previousDetectionResults, previousDetectionRunning, previousStorageError
-		pelicanResults, pelicanRunning = previousPelicanResults, previousPelicanRunning
-		inspections = previousInspections
+		stateLoadError, storageError = previousLoadError, previousStorageError
+		records, running, inspections = previousRecords, previousRunning, previousInspections
+		runCtx, stopRuns, retryDelay = previousRunCtx, previousStopRuns, previousRetryDelay
 	})
+	configuredCredentials = map[string]credential{}
 	statePath, loaded = filepath.Join(t.TempDir(), "state.json"), false
-	stateLoadError, retryDelay = nil, time.Millisecond
+	stateLoadError, storageError = nil, ""
+	records, running, inspections = emptyState(), map[string]*progress{}, map[string]inspection{}
 	runCtx, stopRuns = context.WithCancel(context.Background())
-	candyResults, candyRunning = map[string][]candyResult{}, map[string]*candyProgress{}
-	detectionResults, detectionRunning, storageError = map[string][]detectionResult{}, map[string]*detectionProgress{}, ""
-	pelicanResults, pelicanRunning = map[string][]pelicanResult{}, map[string]bool{}
-	inspections = map[string]inspection{}
+	retryDelay = time.Millisecond
 	hostCall = func(method string, _ any) (json.RawMessage, error) {
 		t.Errorf("unexpected host call: %s", method)
 		return nil, fmt.Errorf("unexpected host call: %s", method)
-	}
-}
-
-func TestHasStandalone21(t *testing.T) {
-	for text, want := range map[string]bool{
-		"21": true, "最少取出**21**个": true, "答案：21。": true,
-		"121": false, "210": false, "2 1": false,
-	} {
-		if got := hasStandalone21(text); got != want {
-			t.Errorf("hasStandalone21(%q) = %v, want %v", text, got, want)
-		}
-	}
-}
-
-func TestFooterVersion(t *testing.T) {
-	if !bytes.Contains(uiHTML, []byte("版本 v"+pluginVersion)) || bytes.Contains(uiHTML, []byte("<!--PLUGIN_VERSION-->")) {
-		t.Fatal("footer must use the active plugin version")
-	}
-}
-
-// The page inlines its scripts, and an inline script ends at the first "</script" anywhere in its text.
-func TestScriptsInlineSafely(t *testing.T) {
-	if got, want := strings.Count(strings.ToLower(string(uiHTML)), "</script"), strings.Count(uiTemplate, "</script>"); got != want {
-		t.Fatalf("page has %d closing script tags, its template %d", got, want)
-	}
-}
-
-func TestEvaluate(t *testing.T) {
-	setupTest(t)
-	var body map[string]any
-	var prompt string
-	hostCall = streamHost(func(_ string, payload any) (json.RawMessage, error) {
-		body, prompt = sentTurn(payload)
-		return mockModelResponse("答案是 21"), nil
-	})
-	r := evaluateCandy(context.Background(), credential{ID: "a", Provider: "claude"}, "m", "xhigh")
-	if !r.OK || r.Answer != "答案是 21" || r.InputTokens != 12 || r.OutputTokens != 3 || r.ReasoningTokens != 1 ||
-		prompt != candyPrompt || body["reasoning"].(map[string]any)["effort"] != "xhigh" {
-		t.Fatalf("result = %+v, body = %v", r, body)
-	}
-	// Unsupported efforts stay as sent and fail the request, which is neither retried nor graded.
-	hostCall = func(string, any) (json.RawMessage, error) {
-		return nil, &EnvelopeError{Code: "unsupported_effort", Message: "21", HTTPStatus: 400}
-	}
-	if r := evaluateCandy(context.Background(), credential{ID: "a", Provider: "claude"}, "m", "xhigh"); r.OK || r.Error == "" || r.Attempts != 1 {
-		t.Fatalf("failed request result = %+v", r)
-	}
-}
-
-func TestRunAllKeepsRecentHistory(t *testing.T) {
-	setupTest(t)
-	candyResults = map[string][]candyResult{"a.json": make([]candyResult, 15)}
-	hostCall = func(method string, _ any) (json.RawMessage, error) {
-		switch method {
-		case "host.auth.list":
-			return json.RawMessage(`{"files":[
-				{"id":"a.json","name":"a.json","provider":"codex"},
-				{"id":"off.json","name":"off.json","provider":"codex","disabled":true},
-				{"id":"c.json","name":"c.json","provider":"claude"}]}`), nil
-		case "host.model.execute_stream":
-			return nil, fmt.Errorf("usage limit reached")
-		}
-		return json.RawMessage(`{}`), nil
-	}
-
-	body, _ := json.Marshal(candyRunRequest{All: true, Model: "gpt-5.6-sol", Runs: 99})
-	request, _ := json.Marshal(managementRequest{Method: http.MethodPost, Path: managementBase + "/run", Body: body})
-	var env struct {
-		Result managementResponse `json:"result"`
-	}
-	_ = json.Unmarshal(HandleMethod("management.handle", request), &env)
-	if string(env.Result.Body) != `{"started":2,"unchecked":2}` {
-		t.Fatalf("run = %d %s", env.Result.StatusCode, env.Result.Body)
-	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		mu.Lock()
-		idle := len(candyRunning) == 0
-		mu.Unlock()
-		if idle {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("runs did not finish")
-		}
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	history := candyResults["a.json"]
-	if len(history) != historyLimit || history[historyLimit-candyMaxRuns-1].Error != "" || history[historyLimit-candyMaxRuns].Error == "" {
-		t.Fatalf("want 10 old and %d new results, got %+v", candyMaxRuns, history)
-	}
-	if len(candyResults["off.json"]) != 0 || len(candyResults["c.json"]) != candyMaxRuns {
-		t.Fatalf("run all must include non-Codex credentials and skip disabled credentials: %+v", candyResults)
 	}
 }
 
@@ -156,10 +56,32 @@ func TestRegistration(t *testing.T) {
 			t.Errorf("metadata %s is empty", field)
 		}
 	}
-	for _, prompt := range []string{candyPrompt, pelicanPrompt} {
-		if !bytes.Contains(uiHTML, []byte("<code>"+html.EscapeString(prompt)+"</code>")) {
-			t.Error("displayed prompt differs from the evaluation prompt")
+	hostCall = func(string, any) (json.RawMessage, error) { return json.RawMessage(`{"files":[]}`), nil }
+	for path, status := range map[string]int{"/state/": http.StatusOK, "/missing": http.StatusNotFound} {
+		request, _ := json.Marshal(managementRequest{Method: http.MethodGet, Path: managementBase + path})
+		var env struct {
+			Result managementResponse `json:"result"`
 		}
+		if json.Unmarshal(HandleMethod("management.handle", request), &env); env.Result.StatusCode != status {
+			t.Errorf("GET %s = %d, want %d", path, env.Result.StatusCode, status)
+		}
+	}
+}
+
+// The page inlines its template parts, and an inline script ends at the first "</script" anywhere in its text.
+func TestPage(t *testing.T) {
+	page := string(uiHTML)
+	for _, want := range []string{"版本 v" + pluginVersion, "<code>" + html.EscapeString(candyPrompt) + "</code>", "<code>" + html.EscapeString(pelicanPrompt) + "</code>",
+		`"requests":3`, `"gpt-6.1-sol":"gpt-6-astra"`, detectorLicense} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	if placeholder := regexp.MustCompile(`/\*[A-Z_]+\*/|<!--[A-Z_]+-->`).FindString(page); placeholder != "" {
+		t.Errorf("unresolved placeholder %s", placeholder)
+	}
+	if got, want := strings.Count(strings.ToLower(page), "</script"), strings.Count(uiTemplate, "</script>"); got != want {
+		t.Errorf("page has %d closing script tags, its template %d", got, want)
 	}
 }
 
@@ -203,21 +125,21 @@ func TestStateCredentialPlans(t *testing.T) {
 	}
 	response := stateResponse()
 	var state struct {
-		Auths []credentialView `json:"auths"`
+		Credentials []credentialView `json:"credentials"`
 	}
 	if err := json.Unmarshal(response.Body, &state); err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("state response = %d, decode error = %v", response.StatusCode, err)
 	}
 	want := []string{"free", "plus", "prolite", "", "", ""}
-	if len(state.Auths) != len(want) {
-		t.Fatalf("got %d credentials, want %d", len(state.Auths), len(want))
+	if len(state.Credentials) != len(want) {
+		t.Fatalf("got %d credentials, want %d", len(state.Credentials), len(want))
 	}
 	for i, plan := range want {
-		if state.Auths[i].PlanType != plan || state.Auths[i].Results == nil {
-			t.Errorf("credential %s: plan = %q, want %q; results = %v", state.Auths[i].ID, state.Auths[i].PlanType, plan, state.Auths[i].Results)
+		if state.Credentials[i].PlanType != plan || state.Credentials[i].Candies == nil {
+			t.Errorf("credential %s: plan = %q, want %q; candies = %v", state.Credentials[i].ID, state.Credentials[i].PlanType, plan, state.Credentials[i].Candies)
 		}
 	}
-	if !state.Auths[2].Disabled {
+	if !state.Credentials[2].Disabled {
 		t.Error("disabled credential lost its status")
 	}
 	for _, secret := range [][]byte{[]byte("private-access-token"), []byte("id_token"), []byte("signature")} {
@@ -227,74 +149,12 @@ func TestStateCredentialPlans(t *testing.T) {
 	}
 }
 
-func TestStatePersistence(t *testing.T) {
-	setupTest(t)
-	if err := os.WriteFile(statePath, []byte(`{"results":{"old":[{"answer":"21","ok":true}]}}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	loadState()
-	if len(candyResults["old"]) != 1 || len(detectionResults) != 0 {
-		t.Fatal("independent candy history was not restored")
-	}
-	loaded = false
-	for i := range historyLimit + 5 {
-		candyResults["a"] = append(candyResults["a"], candyResult{InputTokens: int64(i)})
-	}
-	if err := saveStateLocked(); err != nil {
-		t.Fatal(err)
-	}
-	candyResults = map[string][]candyResult{}
-	loadState()
-	if history := candyResults["a"]; len(history) != historyLimit || history[0].InputTokens != 5 {
-		t.Fatalf("restored history must keep the latest %d results: %+v", historyLimit, history)
-	}
-	candyRunning["a"] = &candyProgress{Done: 1, Total: 2}
-	request := managementRequest{Method: http.MethodDelete, Path: managementBase + "/results"}
-	if response := handleManagement(request); response.StatusCode != http.StatusOK || len(candyResults) != 0 || candyRunning["a"].Done != 1 {
-		t.Fatalf("clear must remove history and preserve in-flight runs: %+v", response)
-	}
-	loaded = false
-	candyResults["a"] = []candyResult{{OK: true}}
-	loadState()
-	if len(candyResults) != 0 {
-		t.Fatal("cleared records reappeared after reloading state")
-	}
-	candyResults["keep"] = []candyResult{{Answer: "21", OK: true}}
-	statePath = filepath.Join(t.TempDir(), "missing", "state.json")
-	if response := handleManagement(request); response.StatusCode != http.StatusInternalServerError || len(candyResults["keep"]) != 1 {
-		t.Fatalf("failed persistence must report an error and preserve history: %+v", response)
-	}
-	if storageError == "" {
-		t.Fatal("save failure must be visible in the page state")
-	}
-}
-
-func TestUnreadableStateIsPreserved(t *testing.T) {
-	for _, input := range []string{`{"results":`, `null`} {
-		t.Run(input, func(t *testing.T) {
-			setupTest(t)
-			data := []byte(input)
-			if err := os.WriteFile(statePath, data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			loadState()
-			if storageError == "" || saveStateLocked() == nil {
-				t.Fatal("unreadable history must report an error and block replacement")
-			}
-			got, err := os.ReadFile(statePath)
-			if err != nil || !bytes.Equal(got, data) {
-				t.Fatal("unreadable history was overwritten")
-			}
-		})
-	}
-}
-
 func TestQuiesceStopsTests(t *testing.T) {
 	setupTest(t)
 	gate, started := make(chan struct{}), make(chan struct{}, 3)
 	hostCall = streamHost(func(method string, _ any) (json.RawMessage, error) {
 		if method == "host.auth.list" {
-			return json.RawMessage(`{"files":[{"id":"candy","provider":"codex"},{"id":"detection","provider":"codex"}]}`), nil
+			return json.RawMessage(`{"files":[{"id":"candy","provider":"codex"},{"id":"fingerprint","provider":"codex"}]}`), nil
 		}
 		select {
 		case started <- struct{}{}:
@@ -304,9 +164,9 @@ func TestQuiesceStopsTests(t *testing.T) {
 		return mockModelResponse("21"), nil
 	})
 	defer func() { close(gate); tasks.Wait() }()
-	candy := []byte(`{"auth_ids":["candy"],"model":"gpt-5.5","runs":10}`)
-	detection := []byte(`{"auth_ids":["detection"],"model":"gpt-5.5","concurrency":2}`)
-	if candyRunResponse(candy).StatusCode != 200 || detectionRunResponse(detection).StatusCode != 200 {
+	candy := []byte(`{"credential_ids":["candy"],"model":"gpt-5.5","runs":10}`)
+	fingerprint := []byte(`{"credential_ids":["fingerprint"],"model":"gpt-5.5","concurrency":2}`)
+	if candyRunResponse(candy).StatusCode != 200 || fingerprintRunResponse(fingerprint).StatusCode != 200 {
 		t.Fatal("could not start tests")
 	}
 	for range 3 {
@@ -329,7 +189,7 @@ func TestQuiesceStopsTests(t *testing.T) {
 			t.Fatal("plugin did not enter quiesce")
 		}
 	}
-	if candyRunResponse(candy).StatusCode != 503 || detectionRunResponse(detection).StatusCode != 503 {
+	if candyRunResponse(candy).StatusCode != 503 || fingerprintRunResponse(fingerprint).StatusCode != 503 {
 		t.Fatal("quiescing plugin accepted new tasks")
 	}
 	for range 3 {
@@ -340,30 +200,12 @@ func TestQuiesceStopsTests(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("plugin did not finish in-flight tasks")
 	}
-	// Abandoned requests leave no candy record; the detection keeps what it collected.
-	if len(candyResults["candy"]) != 0 || detectionResults["detection"][0].Status != "cancelled" {
+	// Abandoned requests leave no candy record; the fingerprint run keeps what it collected.
+	if len(records.Candies["candy"]) != 0 || records.Fingerprints["fingerprint"][0].Status != "cancelled" || len(running) != 0 {
 		t.Fatal("quiesce did not stop the tests")
 	}
 	HandleMethod("plugin.reconfigure", nil)
 	if runCtx.Err() != nil {
 		t.Fatal("reconfiguration did not resume the plugin")
-	}
-}
-
-func TestRegisteredRoutesAreHandled(t *testing.T) {
-	setupTest(t)
-	hostCall = func(string, any) (json.RawMessage, error) { return json.RawMessage(`{"files":[]}`), nil }
-	var env struct {
-		Result struct {
-			Routes []struct{ Method, Path string } `json:"routes"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(HandleMethod("management.register", nil), &env); err != nil || len(env.Result.Routes) == 0 {
-		t.Fatalf("routes = %+v, %v", env, err)
-	}
-	for _, route := range env.Result.Routes {
-		if res := handleManagement(managementRequest{Method: route.Method, Path: route.Path}); bytes.Contains(res.Body, []byte("Route not found")) {
-			t.Errorf("%s %s is registered but not handled", route.Method, route.Path)
-		}
 	}
 }

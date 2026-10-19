@@ -8,21 +8,79 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strings"
+	"time"
 )
 
-type persistedState struct {
-	Results    map[string][]candyResult     `json:"results"`
-	Detections map[string][]detectionResult `json:"detections,omitempty"`
-	Pelicans   map[string][]pelicanResult   `json:"pelicans,omitempty"`
+// Each credential keeps its latest historyLimit records of every test.
+const historyLimit = 20
+
+// history holds the records of one test per credential ID, oldest first.
+type history[T any] map[string][]T
+
+func (h history[T]) add(id string, r T) {
+	records := append(h[id], r)
+	h[id] = records[max(0, len(records)-historyLimit):]
+}
+
+// recent returns a non-nil copy of h with at most historyLimit records per credential.
+func recent[T any](h history[T]) history[T] {
+	out := history[T]{}
+	for id, records := range h {
+		out[id] = records[max(0, len(records)-historyLimit):]
+	}
+	return out
+}
+
+// state is everything the plugin persists, in the layout of schema stateSchemaVersion.
+type state struct {
+	SchemaVersion int                        `json:"schema_version"`
+	Candies       history[candyRecord]       `json:"candies"`
+	Fingerprints  history[fingerprintRecord] `json:"fingerprints"`
+	Pelicans      history[pelicanRecord]     `json:"pelicans"`
+}
+
+func emptyState() state {
+	return state{SchemaVersion: stateSchemaVersion, Candies: history[candyRecord]{}, Fingerprints: history[fingerprintRecord]{}, Pelicans: history[pelicanRecord]{}}
+}
+
+// record is what the records of every test have.
+type record struct {
+	ID         string    `json:"id"`
+	Time       time.Time `json:"time"`
+	Model      string    `json:"model"`
+	Status     string    `json:"status"`
+	Error      string    `json:"error,omitempty"`
+	DurationMS int64     `json:"duration_ms"`
+	usage
+}
+
+func (r record) base() record { return r }
+
+func newRecord(model string, at time.Time) record {
+	return record{ID: fmt.Sprint(at.UnixNano()), Time: at.UTC(), Model: model}
+}
+
+const unsupportedModelMessage = "已跳过：此凭证不支持所选模型"
+
+func skippedRecord(model string) record {
+	r := newRecord(model, time.Now())
+	r.Status, r.Error = "skipped", unsupportedModelMessage
+	return r
 }
 
 var (
-	statePath      = "plugins/" + pluginID + "-state.json"
-	loaded         bool
+	statePath = "plugins/" + pluginID + "-state.json"
+	// records is the state of every test, guarded by mu.
+	records = emptyState()
+	loaded  bool
+	// stateLoadError keeps a state file the plugin could not read or back up from being replaced.
 	stateLoadError error
 	storageError   string
 )
 
+// loadState reads the state file once. A file of an older schema is migrated, backed up beside the state
+// file as it was, and saved in the current schema.
 func loadState() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -34,112 +92,101 @@ func loadState() {
 	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	var state *persistedState
+	var s state
+	var version int
 	if err == nil {
-		err = json.Unmarshal(data, &state)
-		if err == nil && state == nil {
-			err = errors.New("测试记录格式无效")
-		}
+		s, version, err = readState(data)
 	}
 	if err != nil {
-		stateLoadError = fmt.Errorf("测试记录读取失败，为保护原文件已暂停保存：%w", err)
-		storageError = stateLoadError.Error()
+		blockSaving("测试记录读取失败", err)
 		return
 	}
-	if state.Results != nil {
-		candyResults = state.Results
-	}
-	if state.Detections != nil {
-		detectionResults = state.Detections
-	}
-	if state.Pelicans != nil {
-		pelicanResults = state.Pelicans
-	}
-	keepRecent(candyResults)
-	keepRecent(detectionResults)
-	keepRecent(pelicanResults)
-}
-
-// Each credential keeps its latest historyLimit records of every test.
-const historyLimit = 20
-
-func appendRecent[T any](history []T, r T) []T {
-	history = append(history, r)
-	return history[max(0, len(history)-historyLimit):]
-}
-
-func keepRecent[T any](histories map[string][]T) {
-	for id, history := range histories {
-		histories[id] = history[max(0, len(history)-historyLimit):]
-	}
-}
-
-func currentState() persistedState {
-	return persistedState{Results: candyResults, Detections: detectionResults, Pelicans: pelicanResults}
-}
-
-// Call with mu held so all histories are written as one snapshot.
-func saveStateLocked() (err error) {
-	defer func() {
-		storageError = ""
-		if err != nil {
-			storageError = "测试记录保存失败：" + err.Error()
+	records = s
+	if version < stateSchemaVersion {
+		backup := fmt.Sprintf("%s.v%d.json", strings.TrimSuffix(statePath, ".json"), version)
+		if err := os.WriteFile(backup, data, 0o600); err != nil {
+			blockSaving("旧版测试记录备份失败", err)
+			return
 		}
-	}()
+		_ = saveStateLocked()
+	}
+}
+
+func blockSaving(reason string, err error) {
+	stateLoadError = fmt.Errorf("%s，为保护原文件已暂停保存：%w", reason, err)
+	storageError = stateLoadError.Error()
+}
+
+// saveStateLocked writes all records as one snapshot; call it with mu held.
+func saveStateLocked() error {
 	if stateLoadError != nil {
 		return stateLoadError
 	}
-	data, err := json.Marshal(currentState())
+	err := writeState()
+	storageError = ""
+	if err != nil {
+		storageError = "测试记录保存失败：" + err.Error()
+	}
+	return err
+}
+
+func writeState() error {
+	data, err := json.Marshal(records)
 	if err != nil {
 		return err
 	}
 	tmp := statePath + ".tmp"
 	defer os.Remove(tmp)
-	if err = os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, statePath)
 }
 
-func recordResponse(scope string, query url.Values) managementResponse {
-	authID, id := query.Get("auth_id"), query.Get("id")
+func recordResponse(test string, query url.Values) managementResponse {
+	credentialID, id := query.Get("credential_id"), query.Get("id")
 	mu.Lock()
 	defer mu.Unlock()
-	var record any
-	switch scope {
-	case "detection":
-		if i := slices.IndexFunc(detectionResults[authID], func(r detectionResult) bool { return r.ID == id }); i >= 0 {
-			record = detectionResults[authID][i]
-		}
+	var found any
+	switch test {
+	case "fingerprint":
+		found = findRecord(records.Fingerprints[credentialID], id)
 	case "pelican":
-		if i := slices.IndexFunc(pelicanResults[authID], func(r pelicanResult) bool { return r.ID == id }); i >= 0 {
-			record = pelicanResults[authID][i]
-		}
+		found = findRecord(records.Pelicans[credentialID], id)
 	}
-	if record == nil {
+	if found == nil {
 		return jsonError(http.StatusNotFound, "记录不存在，可能已被清空")
 	}
-	return jsonResponse(http.StatusOK, record)
+	return jsonResponse(http.StatusOK, found)
 }
 
-func clearHistoryResponse(scope string) managementResponse {
+// findRecord returns the record with id, or nil.
+func findRecord[T interface{ base() record }](history []T, id string) any {
+	if i := slices.IndexFunc(history, func(r T) bool { return r.base().ID == id }); i >= 0 {
+		return history[i]
+	}
+	return nil
+}
+
+// clearRecordsResponse deletes the records of test, or of every test for "all".
+func clearRecordsResponse(test string) managementResponse {
 	mu.Lock()
 	defer mu.Unlock()
-	previous := currentState()
-	switch scope {
-	case "detection":
-		detectionResults = map[string][]detectionResult{}
+	previous := records
+	switch test {
 	case "candy":
-		candyResults = map[string][]candyResult{}
+		records.Candies = history[candyRecord]{}
+	case "fingerprint":
+		records.Fingerprints = history[fingerprintRecord]{}
 	case "pelican":
-		pelicanResults = map[string][]pelicanResult{}
+		records.Pelicans = history[pelicanRecord]{}
 	case "all":
-		candyResults, detectionResults, pelicanResults = map[string][]candyResult{}, map[string][]detectionResult{}, map[string][]pelicanResult{}
+		records = emptyState()
 	default:
 		return jsonError(http.StatusBadRequest, "未知测试类型")
 	}
 	if err := saveStateLocked(); err != nil {
-		candyResults, detectionResults, pelicanResults = previous.Results, previous.Detections, previous.Pelicans
+		records = previous
 		return jsonError(http.StatusInternalServerError, "清空测试记录失败："+err.Error())
 	}
 	return jsonResponse(http.StatusOK, map[string]bool{"cleared": true})

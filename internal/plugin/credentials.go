@@ -53,16 +53,6 @@ type hostAuthFile struct {
 	NextRetryAfter time.Time `json:"next_retry_after"`
 }
 
-type credentialView struct {
-	credential
-	Running          *candyProgress     `json:"running,omitempty"`
-	Results          []candyResult      `json:"results"`
-	DetectionRunning *detectionProgress `json:"detection_running,omitempty"`
-	Detections       []detectionResult  `json:"detections"`
-	PelicanRunning   bool               `json:"pelican_running,omitempty"`
-	Pelicans         []pelicanResult    `json:"pelicans"`
-}
-
 // host.auth.list omits some config-backed credentials. The UI syncs their CPA
 // stable IDs, masked key previews, base URLs and group names; keys stay in CPA.
 var configuredCredentials = map[string]credential{}
@@ -192,8 +182,6 @@ func selectedCredentials(ids []string, all bool) ([]credential, error) {
 	}
 	return selected, nil
 }
-
-const unsupportedModelMessage = "已跳过：此凭证不支持所选模型"
 
 // The UI supplies CPA's credential model catalogs. A missing/null catalog means
 // support is unknown, not unsupported.

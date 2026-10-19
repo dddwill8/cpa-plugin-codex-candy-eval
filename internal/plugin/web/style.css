@@ -76,7 +76,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .markdown :is(th, td) { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
 .markdown th { color: var(--muted); font-weight: 500; background: var(--sunken); }
 .markdown tr:last-child td { border-bottom: 0; }
-:is(.dt-sample, .markdown) pre { overflow: auto; padding: 12px; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+:is(.fingerprint-sample, .markdown) pre { overflow: auto; padding: 12px; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
 
 /* Page navigation and introduction */
 header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: var(--section-gap); }
@@ -124,9 +124,9 @@ details.problem[open] summary .chev, .row.open .toggle .chev { transform: rotate
 .result-meta .model-meta .meta { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .verdict { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 8px 1px 6px; border-radius: 999px; background: var(--status-bg, var(--control-bg)); color: var(--status-ink, var(--muted)); font-size: 12px; font-weight: 600; }
 .verdict .icon, .metric .icon { width: 13px; height: 13px; }
-.verdict.ok, .outcome.ok, .dt-summary.ok { --status-ink: var(--success-ink); --status-bg: var(--success-soft); }
+.verdict.ok, .outcome.ok, .fingerprint-summary.ok { --status-ink: var(--success-ink); --status-bg: var(--success-soft); }
 .verdict.bad, .outcome.bad { --status-ink: var(--danger-ink); --status-bg: var(--danger-soft); }
-.outcome.warn, .dt-summary.warn { --status-ink: var(--warning-ink); --status-bg: var(--warning-soft); }
+.outcome.warn, .fingerprint-summary.warn { --status-ink: var(--warning-ink); --status-bg: var(--warning-soft); }
 .verdict.err, .verdict.skip { border: 1px solid var(--control-line); }
 .meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; max-width: 100%; color: var(--muted); font-size: 12px; }
@@ -140,7 +140,7 @@ details.problem[open] summary .chev, .row.open .toggle .chev { transform: rotate
 /* Short columns are fixed. Credential, result and model tracks share the rest equally up to their caps;
    any remaining space is spread evenly across the gaps. */
 #candy-panel { --toolbar-columns: 200px 120px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) var(--action-width); }
-#detection-panel { --toolbar-columns: 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
+#fingerprint-panel { --toolbar-columns: 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
 #pelican-panel { --toolbar-columns: 200px 120px minmax(0, 1fr); --preview-scale: .15; --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) calc(800px * var(--preview-scale)) var(--switch-width) var(--action-width); }
 .list-head, .list-row, .history-panel { display: grid; grid-template-columns: var(--list-columns); justify-content: space-between; align-items: center; gap: var(--list-gap); padding-inline: var(--list-padding); }
 .list-head { padding-block: 10px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
@@ -295,37 +295,37 @@ dialog::backdrop { background: rgb(0 0 0 / 35%); }
 .detail-warning { color: var(--danger-ink); overflow-wrap: anywhere; }
 
 /* Fingerprint detection */
-.dt-test-model { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.dt-prediction { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; }
-.dt-prediction > span:first-child { min-width: 0; }
-.dt-probability { color: var(--status-ink, var(--muted)); font-size: 12px; white-space: nowrap; }
-.dt-summary { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 110px; gap: 12px; margin: 0 0 20px; }
-.dt-summary > div { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--sunken); }
-.dt-summary > div:first-child { background: var(--status-bg, var(--sunken)); border-color: color-mix(in srgb, var(--status-ink, var(--line)) 25%, var(--line)); }
-.dt-summary > div:first-child dt, .dt-summary > div:first-child small { color: var(--status-ink, var(--muted)); }
-.dt-summary dt { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-.dt-summary dd { margin: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
-.dt-summary small { display: block; font-size: 13px; color: var(--accent-ink); font-weight: 500; margin-top: 4px; }
-.dt-result-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 20px 0 10px; }
-.dt-result-heading h3 { margin: 0; font-size: 14px; }
-.dt-ranking { display: grid; gap: 2px; }
-.dt-rank { display: grid; grid-template-columns: 26px minmax(180px, 1fr) minmax(70px, 1fr) 68px; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 8px; font-size: 12px; }
-.dt-rank:first-child { background: var(--accent-soft); }
-.dt-rank-name { overflow-wrap: anywhere; }
-.dt-rank > :last-child { text-align: right; }
-.dt-bar { height: 7px; overflow: hidden; border-radius: 99px; background: var(--line); }
-.dt-bar span { display: block; height: 100%; min-width: 0; border-radius: inherit; background: var(--accent); }
-.dt-sample { border-top: 1px solid var(--line); padding: 12px 0; }
-.dt-sample summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; cursor: pointer; font-size: 13px; }
-.dt-sample summary .chev { color: var(--muted); }
-.dt-sample[open] summary .chev { transform: rotate(90deg); }
-.dt-sample-part { margin-top: 12px; }
-.dt-sample-part pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; }
+.fingerprint-test-model { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.fingerprint-prediction { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; }
+.fingerprint-prediction > span:first-child { min-width: 0; }
+.fingerprint-probability { color: var(--status-ink, var(--muted)); font-size: 12px; white-space: nowrap; }
+.fingerprint-summary { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 110px; gap: 12px; margin: 0 0 20px; }
+.fingerprint-summary > div { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--sunken); }
+.fingerprint-summary > div:first-child { background: var(--status-bg, var(--sunken)); border-color: color-mix(in srgb, var(--status-ink, var(--line)) 25%, var(--line)); }
+.fingerprint-summary > div:first-child dt, .fingerprint-summary > div:first-child small { color: var(--status-ink, var(--muted)); }
+.fingerprint-summary dt { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.fingerprint-summary dd { margin: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+.fingerprint-summary small { display: block; font-size: 13px; color: var(--accent-ink); font-weight: 500; margin-top: 4px; }
+.fingerprint-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 20px 0 10px; }
+.fingerprint-heading h3 { margin: 0; font-size: 14px; }
+.fingerprint-ranking { display: grid; gap: 2px; }
+.fingerprint-rank { display: grid; grid-template-columns: 26px minmax(180px, 1fr) minmax(70px, 1fr) 68px; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 8px; font-size: 12px; }
+.fingerprint-rank:first-child { background: var(--accent-soft); }
+.fingerprint-rank-name { overflow-wrap: anywhere; }
+.fingerprint-rank > :last-child { text-align: right; }
+.fingerprint-bar { height: 7px; overflow: hidden; border-radius: 99px; background: var(--line); }
+.fingerprint-bar span { display: block; height: 100%; min-width: 0; border-radius: inherit; background: var(--accent); }
+.fingerprint-sample { border-top: 1px solid var(--line); padding: 12px 0; }
+.fingerprint-sample summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; cursor: pointer; font-size: 13px; }
+.fingerprint-sample summary .chev { color: var(--muted); }
+.fingerprint-sample[open] summary .chev { transform: rotate(90deg); }
+.fingerprint-sample-part { margin-top: 12px; }
+.fingerprint-sample-part pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; }
 
 /* Feedback and login */
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; color: var(--muted); font-size: 12px; line-height: 20px; margin: 0 4px 10px; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.legend #rate-scope { margin-left: auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.legend #candy-rate-scope { margin-left: auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .empty { padding: 40px 20px; text-align: center; color: var(--muted); }
 .login { max-width: 380px; margin: 12vh auto 0; padding: 24px; }
 .login h2 { margin: 0 0 6px; font-size: 17px; }
@@ -387,11 +387,11 @@ dialog::backdrop { background: rgb(0 0 0 / 35%); }
   .answer-toggle { justify-self: end; }
   .answer-content { grid-column: 1 / -1; }
   .result-dialog { --dialog-padding: 16px; }
-  :is(#dt-toolbar, #pl-toolbar) > .btn { grid-column: 1 / -1; }
-  .dt-summary { grid-template-columns: 1fr 1fr; }
-  .dt-summary > div:first-child { grid-column: 1 / -1; }
-  .dt-rank { grid-template-columns: 18px minmax(0, 1fr) 58px; gap: 8px; padding-inline: 6px; }
-  .dt-rank .dt-bar { display: none; }
+  :is(#fingerprint-toolbar, #pelican-toolbar) > .btn { grid-column: 1 / -1; }
+  .fingerprint-summary { grid-template-columns: 1fr 1fr; }
+  .fingerprint-summary > div:first-child { grid-column: 1 / -1; }
+  .fingerprint-rank { grid-template-columns: 18px minmax(0, 1fr) 58px; gap: 8px; padding-inline: 6px; }
+  .fingerprint-rank .fingerprint-bar { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .spin, #refresh[aria-busy="true"] .icon { animation: none; }

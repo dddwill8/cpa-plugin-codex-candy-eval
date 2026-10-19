@@ -14,11 +14,22 @@ import (
 	"unicode"
 )
 
+// usage counts the tokens of one or more model responses.
+type usage struct {
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+}
+
+func (u *usage) add(v usage) {
+	u.InputTokens += v.InputTokens
+	u.OutputTokens += v.OutputTokens
+	u.ReasoningTokens += v.ReasoningTokens
+}
+
 type modelResponse struct {
-	Answer          string
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
+	Answer string
+	usage
 }
 
 func validModelName(model string, allowEffort bool) bool {
@@ -27,7 +38,7 @@ func validModelName(model string, allowEffort bool) bool {
 }
 
 // Time limits of an attempt, as a model stuck repeating itself streams until the upstream cuts it off.
-// Detection challenges normally answer within a minute.
+// Fingerprint challenges normally answer within a minute.
 const (
 	challengeTimeout = 3 * time.Minute
 	answerTimeout    = 10 * time.Minute
@@ -69,9 +80,7 @@ func askCodex(ctx context.Context, auth credential, model, effort, instructions,
 		response, err = executeModel(requestCtx, auth, model, body, headers)
 		cancel()
 		out.Answer = response.Answer
-		out.InputTokens += response.InputTokens
-		out.OutputTokens += response.OutputTokens
-		out.ReasoningTokens += response.ReasoningTokens
+		out.add(response.usage)
 		if err == nil && accept != nil {
 			if err = accept(response.Answer); err != nil {
 				err = retryableError{err}
@@ -147,9 +156,7 @@ func executeModel(ctx context.Context, auth credential, model string, body any, 
 // answerOf returns the answer text and usage of a final response. Any final response reports usage,
 // complete or not.
 func answerOf(out responseBody) (result modelResponse, err error) {
-	result.InputTokens = out.Usage.InputTokens
-	result.OutputTokens = out.Usage.OutputTokens
-	result.ReasoningTokens = out.Usage.OutputTokensDetails.ReasoningTokens
+	result.usage = usage{out.Usage.InputTokens, out.Usage.OutputTokens, out.Usage.OutputTokensDetails.ReasoningTokens}
 	if (out.Status != "" && out.Status != "completed") || (len(out.Error) > 0 && string(out.Error) != "null") {
 		return result, fmt.Errorf("模型响应未完成（%s）：%s", out.Status, out.Error)
 	}

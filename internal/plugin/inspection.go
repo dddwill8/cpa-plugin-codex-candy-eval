@@ -9,19 +9,19 @@ import (
 )
 
 type inspection struct {
-	started time.Time
-	authIDs []string
+	started       time.Time
+	credentialIDs []string
 }
 
 type inspectionItem struct {
 	credential
-	Results any `json:"results"`
+	Records any `json:"records"`
 	// Degraded is null when no record from this inspection reaches a verdict, e.g. its requests failed.
 	Degraded *bool `json:"degraded"`
 }
 
 var inspectionRuns = map[string]func([]byte) managementResponse{
-	"candy": candyRunResponse, "detection": detectionRunResponse,
+	"candy": candyRunResponse, "fingerprint": fingerprintRunResponse,
 }
 
 // The latest inspection of each test, kept until the plugin stops.
@@ -55,7 +55,7 @@ func inspectionRunResponse(body []byte) managementResponse {
 	}
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(body, &fields)
-	fields["auth_ids"], _ = json.Marshal(ids)
+	fields["credential_ids"], _ = json.Marshal(ids)
 	delete(fields, "all")
 	body, _ = json.Marshal(fields)
 	started := time.Now()
@@ -93,48 +93,47 @@ func inspectionResponse(test string) managementResponse {
 	if !ok {
 		return jsonError(http.StatusNotFound, "还没有开始过这项巡检")
 	}
-	running, items := false, []inspectionItem{}
+	busy, items := false, []inspectionItem{}
 	for _, auth := range auths {
-		if !slices.Contains(latest.authIDs, auth.ID) {
+		if !slices.Contains(latest.credentialIDs, auth.ID) {
 			continue
 		}
+		busy = busy || running[auth.ID] != nil && running[auth.ID].Test == test
 		item := inspectionItem{credential: auth}
 		switch test {
 		case "candy":
-			running = running || candyRunning[auth.ID] != nil
-			item.Results, item.Degraded = inspected(candyResults[auth.ID], latest.started, func(r candyResult) (time.Time, bool, bool) {
-				return r.Time, !r.Skipped && r.Error == "", !r.OK
+			item.Records, item.Degraded = inspected(records.Candies[auth.ID], latest.started, func(r candyRecord) (bool, bool) {
+				return r.Status == "correct" || r.Status == "wrong", r.Status == "wrong"
 			})
-		case "detection":
-			running = running || detectionRunning[auth.ID] != nil
-			records, degraded := inspected(detectionResults[auth.ID], latest.started, func(r detectionResult) (time.Time, bool, bool) {
+		case "fingerprint":
+			found, degraded := inspected(records.Fingerprints[auth.ID], latest.started, func(r fingerprintRecord) (bool, bool) {
 				if r.Attribution == nil || (r.Status != "completed" && r.Status != "partial") {
-					return r.Time, false, false
+					return false, false
 				}
-				return r.Time, true, detectionModelID(r.Model) != detectionModelID(r.Attribution.Prediction)
+				return true, fingerprintModelID(r.Model) != fingerprintModelID(r.Attribution.Prediction)
 			})
-			item.Results, item.Degraded = summaries(records), degraded
+			item.Records, item.Degraded = summaries(found), degraded
 		}
 		items = append(items, item)
 	}
-	return jsonResponse(http.StatusOK, map[string]any{"running": running, "credentials": items})
+	return jsonResponse(http.StatusOK, map[string]any{"running": busy, "credentials": items})
 }
 
 // inspected returns the records of history made since started, and whether any of them shows a degraded
-// model, or nil when none reaches a verdict. judge returns when a record was made and its verdict.
-func inspected[T any](history []T, started time.Time, judge func(T) (at time.Time, concluded, degraded bool)) ([]T, *bool) {
-	records, anyConcluded, anyDegraded := []T{}, false, false
+// model, or nil when none reaches a verdict. judge returns a record's verdict.
+func inspected[T interface{ base() record }](history []T, started time.Time, judge func(T) (concluded, degraded bool)) ([]T, *bool) {
+	found, anyConcluded, anyDegraded := []T{}, false, false
 	for _, r := range history {
-		at, concluded, degraded := judge(r)
-		if at.Before(started) {
+		if r.base().Time.Before(started) {
 			continue
 		}
-		records = append(records, r)
+		concluded, degraded := judge(r)
+		found = append(found, r)
 		anyConcluded = anyConcluded || concluded
 		anyDegraded = anyDegraded || concluded && degraded
 	}
 	if !anyConcluded {
-		return records, nil
+		return found, nil
 	}
-	return records, &anyDegraded
+	return found, &anyDegraded
 }

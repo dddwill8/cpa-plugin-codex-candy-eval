@@ -61,7 +61,7 @@ def notify(title, message):
 
 
 def state():
-    return {c["id"]: c for c in api("GET", PLUGIN + "/state")["auths"]}
+    return {c["id"]: c for c in api("GET", PLUGIN + "/state")["credentials"]}
 
 
 def is_free(c):
@@ -69,9 +69,7 @@ def is_free(c):
 
 
 def available(c):
-    return c is not None and not c.get("disabled") and not c.get("unavailable") and not any(
-        c.get(key) for key in ("running", "detection_running", "pelican_running")
-    )
+    return c is not None and not c.get("disabled") and not c.get("unavailable") and not c.get("running")
 
 
 def matches(c, patterns):
@@ -86,9 +84,9 @@ def run_candy(accounts, runs):
     answers = {c["id"]: None for c in accounts}
     if not eligible:
         return answers
-    known = {c["id"]: {r["time"] for r in before[c["id"]].get("results", [])} for c in eligible}
+    known = {c["id"]: {r["id"] for r in before[c["id"]]["candies"]} for c in eligible}
     options = {"model": MODEL.strip(), "effort": EFFORT.strip(), "runs": runs}
-    run = api("POST", PLUGIN + "/run", {**options, "auth_ids": [c["id"] for c in eligible]})
+    run = api("POST", PLUGIN + "/candy/run", {**options, "credential_ids": [c["id"] for c in eligible]})
     phase = "首测" if runs == 1 else "复测"
     print(f"  {phase}：{run['started']} 个账号，每个账号 {runs} 次")
 
@@ -96,18 +94,17 @@ def run_candy(accounts, runs):
     while True:
         time.sleep(15)
         after = state()
-        if not any(after.get(c["id"], {}).get("running") for c in eligible):
+        if not any((after.get(c["id"], {}).get("running") or {}).get("test") == "candy" for c in eligible):
             break
         if time.monotonic() > deadline:
             raise SystemExit(f"等待{phase}完成超时")
 
     for c in eligible:
-        results = [r for r in after.get(c["id"], {}).get("results", [])
-                   if r["time"] not in known[c["id"]]
+        records = [r for r in after.get(c["id"], {}).get("candies", [])
+                   if r["id"] not in known[c["id"]]
                    and r.get("model") == options["model"] and r.get("effort") == options["effort"]]
-        if len(results) == runs and all(not r.get("skipped") and not r.get("error")
-                                       and isinstance(r.get("ok"), bool) for r in results):
-            answers[c["id"]] = [r["ok"] for r in results]
+        if len(records) == runs and all(r["status"] in ("correct", "wrong") for r in records):
+            answers[c["id"]] = [r["status"] == "correct" for r in records]
     return answers
 
 

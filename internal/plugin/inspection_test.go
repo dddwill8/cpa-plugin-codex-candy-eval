@@ -35,17 +35,17 @@ func TestInspection(t *testing.T) {
 	}
 
 	// b is out of scope; an earlier result of a, from before the inspection, must not count.
-	detectionResults["a"] = []detectionResult{{Model: "test-model", Status: "completed", Attribution: &detectionAttribution{Prediction: "test-model"}}}
-	if r := inspectionRunResponse([]byte(`{"test":"detection","model":"test-model","exclude":["*@y.com"]}`)); r.StatusCode != 200 {
+	records.Fingerprints.add("a", fingerprintRecord{record: record{Model: "test-model", Status: "completed"}, Attribution: &fingerprintAttribution{Prediction: "test-model"}})
+	if r := inspectionRunResponse([]byte(`{"test":"fingerprint","model":"test-model","exclude":["*@y.com"]}`)); r.StatusCode != 200 {
 		t.Fatalf("run: %s", r.Body)
 	}
-	running, verdicts := report("detection")
+	running, verdicts := report("fingerprint")
 	close(gate)
 	if !running || verdicts != "a.json=null" {
 		t.Fatalf("running inspection: %v %s", running, verdicts)
 	}
 	tasks.Wait()
-	if running, verdicts := report("detection"); running || verdicts != "a.json=true" {
+	if running, verdicts := report("fingerprint"); running || verdicts != "a.json=true" {
 		t.Fatalf("finished inspection: %v %s", running, verdicts)
 	}
 

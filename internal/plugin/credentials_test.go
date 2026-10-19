@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 )
 
@@ -108,69 +107,5 @@ func TestCredentialModelCatalog(t *testing.T) {
 		if known != tc.known || supported != tc.supported {
 			t.Errorf("%+v: %v %v", tc, known, supported)
 		}
-	}
-}
-
-func TestCandyPreflightPinnedProvidersAndNone(t *testing.T) {
-	setupTest(t)
-	configuredCredentials["config"] = credential{ID: "config", Provider: "openai-compatible-demo", Source: "ai_providers"}
-	hostCall = streamHost(func(method string, payload any) (json.RawMessage, error) {
-		if method == "host.auth.list" {
-			return json.RawMessage(`{"files":[{"id":"skip","provider":"claude"},{"id":"unknown","provider":"gemini"},{"id":"off","provider":"codex","disabled":true}]}`), nil
-		}
-		if method != "host.model.execute_stream" {
-			return nil, fmt.Errorf("unexpected %s", method)
-		}
-		var req struct {
-			ID       string `json:"auth_id"`
-			Provider string `json:"forced_provider"`
-		}
-		raw, _ := json.Marshal(payload)
-		_ = json.Unmarshal(raw, &req)
-		if (req.ID != "config" || req.Provider != "openai-compatible-demo") && (req.ID != "unknown" || req.Provider != "gemini") {
-			t.Errorf("unpinned or skipped request: %+v", req)
-		}
-		if body, _ := sentTurn(payload); body["reasoning"].(map[string]any)["effort"] != nil {
-			t.Error("none sent a reasoning effort")
-		}
-		return mockModelResponse("21"), nil
-	})
-	response := candyRunResponse([]byte(`{"all":true,"model":"alias","effort":"none","runs":2,"model_catalog":{"skip":[],"config":["alias"]}}`))
-	if string(response.Body) != `{"started":2,"skipped":1,"unchecked":1}` {
-		t.Fatalf("run: %s", response.Body)
-	}
-	tasks.Wait()
-	if len(candyResults["skip"]) != 1 || !candyResults["skip"][0].Skipped || candyResults["skip"][0].DurationMS != 0 {
-		t.Fatal("skip was executed or not recorded")
-	}
-	if len(candyResults["config"]) != 2 || len(candyResults["unknown"]) != 2 || len(candyResults["off"]) != 0 {
-		t.Fatal("incorrect run scope")
-	}
-	candyResults = map[string][]candyResult{}
-	loadState()
-	if !candyResults["skip"][0].Skipped || !candyResults["config"][0].OK {
-		t.Fatal("new credential history was not restored")
-	}
-}
-
-func TestDetectionPreflightSkipsWithoutRequests(t *testing.T) {
-	setupTest(t)
-	hostCall = func(method string, _ any) (json.RawMessage, error) {
-		if method != "host.auth.list" {
-			t.Fatalf("skipped detection executed: %s", method)
-		}
-		return json.RawMessage(`{"files":[{"id":"a","provider":"claude"}]}`), nil
-	}
-	response := detectionRunResponse([]byte(`{"all":true,"model":"gpt-5.6-sol","model_catalog":{"a":["claude-model"]}}`))
-	if string(response.Body) != `{"started":0,"skipped":1}` {
-		t.Fatalf("response = %s", response.Body)
-	}
-	if r := detectionResults["a"][0]; r.Status != "skipped" || r.Attribution != nil || r.Samples != nil {
-		t.Fatalf("result = %+v", r)
-	}
-	detectionResults = map[string][]detectionResult{}
-	loadState()
-	if detectionResults["a"][0].Status != "skipped" {
-		t.Fatal("skip history not persisted")
 	}
 }

@@ -156,25 +156,25 @@ func decodeDetector(file, modelsJSON []byte) detector {
 	return d
 }
 
-type detectionOutput struct {
+type fingerprintOutput struct {
 	Text          string `json:"text"`
 	ExpectedCount int    `json:"expected_count"`
 }
 
-type detectionDiagnostic struct {
+type fingerprintDiagnostic struct {
 	Index   int  `json:"index"`
 	Parsed  int  `json:"parsed_numbers"`
 	Minimum int  `json:"minimum_numbers"`
 	Valid   bool `json:"accepted"`
 }
 
-type detectionSequence struct {
+type fingerprintSequence struct {
 	Autocorrelation float64 `json:"autocorrelation"`
 	SmallStepShare  float64 `json:"small_step_share"`
 	ModelLike       bool    `json:"model_like"`
 }
 
-type detectionCandidate struct {
+type fingerprintCandidate struct {
 	Model       string   `json:"model"`
 	DisplayName string   `json:"display_name"`
 	Family      string   `json:"family"`
@@ -183,19 +183,19 @@ type detectionCandidate struct {
 	Score       float64  `json:"score"`
 }
 
-// detectionAttribution ranks every candidate when three answers are valid, with calibrated probabilities.
+// fingerprintAttribution ranks every candidate when three answers are valid, with calibrated probabilities.
 // Decision "partial" ranks one or two valid answers without probabilities, and "not_model" means the
 // answers do not move like a language model's, so nothing is ranked.
-type detectionAttribution struct {
-	Decision         string                `json:"decision,omitempty"`
-	Prediction       string                `json:"prediction"`
-	PredictionName   string                `json:"prediction_name,omitempty"`
-	Probability      *float64              `json:"probability"`
-	Used             int                   `json:"used_outputs"`
-	FamilyPrediction string                `json:"family_prediction_name"`
-	Sequence         *detectionSequence    `json:"sequence,omitempty"`
-	Results          []detectionCandidate  `json:"results"`
-	Diagnostics      []detectionDiagnostic `json:"diagnostics"`
+type fingerprintAttribution struct {
+	Decision         string                  `json:"decision,omitempty"`
+	Prediction       string                  `json:"prediction"`
+	PredictionName   string                  `json:"prediction_name,omitempty"`
+	Probability      *float64                `json:"probability"`
+	Used             int                     `json:"used_outputs"`
+	FamilyPrediction string                  `json:"family_prediction_name"`
+	Sequence         *fingerprintSequence    `json:"sequence,omitempty"`
+	Results          []fingerprintCandidate  `json:"results"`
+	Diagnostics      []fingerprintDiagnostic `json:"diagnostics"`
 }
 
 var digitRuns = regexp.MustCompile(`[0-9]+`)
@@ -230,15 +230,15 @@ func parseNumbers(text string) []int {
 	return best
 }
 
-func analyzeDetection(outputs []detectionOutput) (detectionAttribution, error) {
+func analyzeFingerprint(outputs []fingerprintOutput) (fingerprintAttribution, error) {
 	d := &sharedDetector
-	r := detectionAttribution{}
+	r := fingerprintAttribution{}
 	var accepted [][]int
 	for i, output := range outputs {
 		numbers := parseNumbers(output.Text)
 		minimum := minimumNumbers(output.ExpectedCount)
 		valid := len(numbers) >= minimum
-		r.Diagnostics = append(r.Diagnostics, detectionDiagnostic{i, len(numbers), minimum, valid})
+		r.Diagnostics = append(r.Diagnostics, fingerprintDiagnostic{i, len(numbers), minimum, valid})
 		if valid {
 			accepted = append(accepted, numbers)
 		}
@@ -252,7 +252,7 @@ func analyzeDetection(outputs []detectionOutput) (detectionAttribution, error) {
 	}
 	ranking := d.rank(accepted)
 	var probabilities []float64
-	if r.Used == detectionTarget {
+	if r.Used == fingerprintTarget {
 		probabilities = softmax(ranking, d.Calibration.Tau)
 	} else {
 		r.Decision = "partial"
@@ -264,7 +264,7 @@ func analyzeDetection(outputs []detectionOutput) (detectionAttribution, error) {
 	sort.SliceStable(order, func(a, b int) bool { return ranking[order[a]] > ranking[order[b]] })
 	for _, i := range order {
 		m := d.models[i]
-		candidate := detectionCandidate{Model: m.ID, DisplayName: m.DisplayName, Family: m.Family, FamilyName: m.FamilyName, Score: ranking[i]}
+		candidate := fingerprintCandidate{Model: m.ID, DisplayName: m.DisplayName, Family: m.Family, FamilyName: m.FamilyName, Score: ranking[i]}
 		if probabilities != nil {
 			candidate.Probability = &probabilities[i]
 		}
@@ -278,7 +278,7 @@ func analyzeDetection(outputs []detectionOutput) (detectionAttribution, error) {
 // sequenceShape checks how consecutive numbers move. Language-model answers jump between distant values:
 // a strongly negative lag-1 autocorrelation and almost no steps of 20 or less. Program output and sorted or
 // shuffled lists do not. The limits are 99.5% quantiles over the reference bank's three-answer groups.
-func sequenceShape(answers [][]int) *detectionSequence {
+func sequenceShape(answers [][]int) *fingerprintSequence {
 	var autocorrelations, smallSteps []float64
 	for _, numbers := range answers {
 		x := toFloats(numbers)
@@ -301,7 +301,7 @@ func sequenceShape(answers [][]int) *detectionSequence {
 		autocorrelations = append(autocorrelations, autocorrelation)
 		smallSteps = append(smallSteps, small/float64(len(x)-1))
 	}
-	s := &detectionSequence{Autocorrelation: median(autocorrelations), SmallStepShare: median(smallSteps)}
+	s := &fingerprintSequence{Autocorrelation: median(autocorrelations), SmallStepShare: median(smallSteps)}
 	s.ModelLike = s.Autocorrelation <= -0.23 && s.SmallStepShare <= 0.05
 	return s
 }

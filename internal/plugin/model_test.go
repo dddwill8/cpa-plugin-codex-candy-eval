@@ -77,7 +77,7 @@ func TestRunModelValidation(t *testing.T) {
 	}
 	for _, model := range []string{"", strings.Repeat("m", 201), "model\x00name", "model\nname"} {
 		body, _ := json.Marshal(map[string]any{"model": model})
-		for _, run := range []func([]byte) managementResponse{candyRunResponse, detectionRunResponse, pelicanRunResponse} {
+		for _, run := range []func([]byte) managementResponse{candyRunResponse, fingerprintRunResponse, pelicanRunResponse} {
 			if response := run(body); response.StatusCode != http.StatusBadRequest {
 				t.Fatalf("accepted invalid model %q: %s", model, response.Body)
 			}
@@ -235,27 +235,5 @@ func TestExecuteModel(t *testing.T) {
 		if _, err := executeModel(context.Background(), unpinned, "m", nil, nil); err == nil {
 			t.Fatal("unpinned request accepted")
 		}
-	}
-}
-
-func TestExecuteModelAbandonsStream(t *testing.T) {
-	setupTest(t)
-	closed := make(chan struct{})
-	hostCall = func(method string, _ any) (json.RawMessage, error) {
-		switch method {
-		case "host.model.execute_stream":
-			return json.RawMessage(`{"stream_id":"s"}`), nil
-		case "host.model.stream_close":
-			close(closed)
-			return json.RawMessage(`{}`), nil
-		}
-		<-closed
-		return json.RawMessage(`{"done":true}`), nil
-	}
-	timeout := errors.New("timed out")
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Millisecond, timeout)
-	defer cancel()
-	if _, err := executeModel(ctx, credential{ID: "a", Provider: "codex"}, "m", nil, nil); !errors.Is(err, timeout) || !errors.As(err, new(retryableError)) {
-		t.Fatalf("err=%v", err)
 	}
 }

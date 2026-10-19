@@ -10,11 +10,6 @@ import (
 
 const candyMaxRuns = 10
 
-var (
-	candyResults = map[string][]candyResult{}
-	candyRunning = map[string]*candyProgress{}
-)
-
 const candyPrompt = `不使用任何外部工具回答以下问题：
 
 在一个黑色的袋子里放有三种口味的糖果，每种糖果有两种不同的形状（圆形和五角星形，不同的形状靠手感可以分辨）。现已知不同口味的糖和不同形状的数量统计如下表。参赛者需要在活动前决定摸出的糖果数目，那么，最少取出多少个糖果才能保证手中同时拥有不同形状的苹果味和桃子味的糖？（同时手中有圆形苹果味匹配五角星桃子味糖果，或者有圆形桃子味匹配五角星苹果味糖果都满足要求）
@@ -24,33 +19,18 @@ const candyPrompt = `不使用任何外部工具回答以下问题：
 五角星形   7      6      4
 `
 
-type candyResult struct {
-	Skipped         bool      `json:"skipped,omitempty"`
-	Time            time.Time `json:"time"`
-	Model           string    `json:"model"`
-	Effort          string    `json:"effort"`
-	OK              bool      `json:"ok"`
-	Answer          string    `json:"answer,omitempty"`
-	Error           string    `json:"error,omitempty"`
-	Attempts        int       `json:"attempts,omitempty"`
-	InputTokens     int64     `json:"input_tokens"`
-	OutputTokens    int64     `json:"output_tokens"`
-	ReasoningTokens int64     `json:"reasoning_tokens"`
-	DurationMS      int64     `json:"duration_ms"`
-}
-
-type candyProgress struct {
-	Done  int `json:"done"`
-	Total int `json:"total"`
+// candyRecord is one graded answer: its status is correct, wrong, failed or skipped.
+type candyRecord struct {
+	record
+	Effort   string `json:"effort"`
+	Answer   string `json:"answer,omitempty"`
+	Attempts int    `json:"attempts,omitempty"`
 }
 
 type candyRunRequest struct {
-	ModelCatalog map[string][]string `json:"model_catalog,omitempty"`
-	AuthIDs      []string            `json:"auth_ids"`
-	All          bool                `json:"all"`
-	Model        string              `json:"model"`
-	Effort       string              `json:"effort"`
-	Runs         int                 `json:"runs"`
+	runRequest
+	Effort string `json:"effort"`
+	Runs   int    `json:"runs"`
 }
 
 func candyRunResponse(body []byte) managementResponse {
@@ -64,52 +44,40 @@ func candyRunResponse(body []byte) managementResponse {
 		return jsonError(http.StatusBadRequest, "请选择模型")
 	}
 	req.Runs = min(max(req.Runs, 1), candyMaxRuns)
-	return startRuns(req.AuthIDs, req.All, req.ModelCatalog, req.Model,
+	return startRuns("candy", req.runRequest, req.Runs,
 		func(id string) {
-			candyResults[id] = appendRecent(candyResults[id], candyResult{Time: time.Now().UTC(), Model: req.Model, Effort: req.Effort, Skipped: true, Error: unsupportedModelMessage})
+			records.Candies.add(id, candyRecord{record: skippedRecord(req.Model), Effort: req.Effort})
 		},
-		func(auth credential) {
-			candyRunning[auth.ID] = &candyProgress{Total: req.Runs}
-			go runCandy(runCtx, auth, req.Model, req.Effort, req.Runs)
+		func(ctx context.Context, auth credential, p *progress) {
+			// Each credential answers serially. Stopping ctx drops the answer it interrupts.
+			for range req.Runs {
+				r := evaluateCandy(ctx, auth, req.Model, req.Effort)
+				if ctx.Err() != nil {
+					return
+				}
+				mu.Lock()
+				records.Candies.add(auth.ID, r)
+				p.Done++
+				_ = saveStateLocked()
+				mu.Unlock()
+			}
 		})
 }
 
-// Each credential runs serially; different credentials run in parallel. Stopping ctx drops the run it
-// interrupts.
-func runCandy(ctx context.Context, auth credential, model, effort string, runs int) {
-	id := auth.ID
-	defer tasks.Done()
-	defer func() {
-		mu.Lock()
-		delete(candyRunning, id)
-		mu.Unlock()
-	}()
-	for range runs {
-		r := evaluateCandy(ctx, auth, model, effort)
-		if ctx.Err() != nil {
-			return
-		}
-		mu.Lock()
-		candyResults[id] = appendRecent(candyResults[id], r)
-		candyRunning[id].Done++
-		_ = saveStateLocked()
-		mu.Unlock()
-	}
-}
-
 // evaluateCandy grades one answer. A wrong answer is a result, so only failed requests are retried.
-func evaluateCandy(ctx context.Context, auth credential, model, effort string) candyResult {
+func evaluateCandy(ctx context.Context, auth credential, model, effort string) candyRecord {
 	started := time.Now()
-	r := candyResult{Time: started.UTC(), Model: model, Effort: effort}
+	r := candyRecord{record: newRecord(model, started), Effort: effort}
 	out, attempts, err := askCodex(ctx, auth, model, effort, "", candyPrompt, answerTimeout, nil)
-	r.DurationMS, r.Attempts = time.Since(started).Milliseconds(), attempts
-	r.InputTokens, r.OutputTokens, r.ReasoningTokens = out.InputTokens, out.OutputTokens, out.ReasoningTokens
-	if err != nil {
-		r.Error = truncate(err.Error(), 500)
-		return r
+	r.DurationMS, r.Attempts, r.usage = time.Since(started).Milliseconds(), attempts, out.usage
+	switch {
+	case err != nil:
+		r.Status, r.Error = "failed", truncate(err.Error(), 500)
+	case hasStandalone21(out.Answer):
+		r.Status, r.Answer = "correct", truncate(out.Answer, 4000)
+	default:
+		r.Status, r.Answer = "wrong", truncate(out.Answer, 4000)
 	}
-	r.Answer = truncate(out.Answer, 4000)
-	r.OK = hasStandalone21(out.Answer)
 	return r
 }
 
