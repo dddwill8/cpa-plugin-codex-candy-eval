@@ -642,6 +642,12 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.match(hiddenHTML, /已隐藏 1 张凭证/);
   run(`restoreHealthCredential('down')`);
   assert.equal(element('health-results').innerHTML.split('<details')[0].includes('data-health-toggle="down"'), true);
+  run(`catalogCache.owner = 'owner-keep'; healthAppliedOwner = null; hideHealthCredential('off')`);
+  assert.deepEqual(plain(run(`stored('cpa-codex-candy-eval.health.v1').hidden`)), ['off']);
+  run(`healthHidden = new Set(); healthAppliedOwner = null; renderHealth()`);
+  const keptHTML = element('health-results').innerHTML;
+  assert.equal(keptHTML.split('<details')[0].includes('data-health-toggle="off"'), false);
+  assert.match(keptHTML, /data-health-restore="off"/);
   const savedHealth = run(`stored('cpa-codex-candy-eval.health.v1')`);
   assert.equal(savedHealth.results.some((result) => result.credential_id === 'on' && result.passed), true);
   run(`healthResults = []; renderHealth()`);

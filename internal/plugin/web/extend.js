@@ -80,6 +80,7 @@ function forgetCredentialModels(ids) {
 }
 
 var healthHidden = new Set();
+var healthAppliedOwner = null;
 const healthAbort = new Map();
 const healthChecking = new Set();
 var healthRun = false;
@@ -96,9 +97,23 @@ function saveHealthResults() {
 
 function restoreHealthResults() {
   const saved = stored(HEALTH_STORE);
-  if (!saved || saved.owner !== (catalogCache.owner || "")) return;
+  const owner = catalogCache.owner || "";
+  if (!saved || (saved.owner || "") !== owner) return false;
   if (Array.isArray(saved.results)) healthResults = saved.results.filter((result) => result && typeof result.credential_id === "string");
   healthHidden = new Set(Array.isArray(saved.hidden) ? saved.hidden.filter((id) => typeof id === "string") : []);
+  return true;
+}
+
+// Re-apply the saved hide list once this login's catalog owner is known.
+// A refresh creates a new page, so the in-memory set starts empty.
+function applyPersistedHealth() {
+  const owner = catalogCache.owner || "";
+  if (!owner || healthAppliedOwner === owner) return;
+  healthAppliedOwner = owner;
+  if (!restoreHealthResults()) {
+    healthResults = [];
+    healthHidden = new Set();
+  }
 }
 
 function mergeHealthResult(result) {
@@ -171,6 +186,7 @@ function healthHiddenBox(hidden) {
 function renderHealth() {
   const root = $("health-results");
   if (!root) return;
+  applyPersistedHealth();
   loadHealthCatalogs(false);
   const visible = credentials.filter((credential) => !healthHidden.has(credential.id));
   const hidden = credentials.filter((credential) => healthHidden.has(credential.id));
@@ -313,6 +329,7 @@ function wireExtend() {
   showLogin = function showLoginWithExtend(message) {
     healthResults = [];
     healthHidden = new Set();
+    healthAppliedOwner = null;
     healthChoice.clear();
     healthOpen.clear();
     healthCatalogs = {};
