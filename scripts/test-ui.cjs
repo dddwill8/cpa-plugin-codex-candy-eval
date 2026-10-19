@@ -546,6 +546,15 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
       return {started:1};
     }`);
   run(`EXTEND.wire()`);
+  await run(`healthCatalogTask`);
+  const healthList = element('health-results').innerHTML;
+  for (const name of ['On', 'Off', 'Down', 'Busy', 'Paren']) assert.equal(healthList.includes(name), true, name + ' is listed before the check');
+  assert.equal(healthList.includes('未检测'), true);
+  assert.equal(healthList.includes('health-error'), false);
+  assert.equal(run(`healthChoice.get('on')`), 'xai/grok-4.7');
+  assert.equal(run(`healthChoice.get('paren')`), 'codex-auto-review(high)');
+  run(`setHealthModel('paren', 'claude-sonnet')`);
+  assert.equal(element('health-results').innerHTML.includes('value="claude-sonnet" selected'), true);
   const posted = async (id) => {
     run(`extendCalls = []`);
     await element(id).listeners.click();
@@ -578,9 +587,16 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.equal(healthPosts.length, 1);
   assert.equal(String(healthPosts[0][0]).endsWith('/health/run'), true);
   assert.deepEqual(healthPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
+  assert.equal(healthPosts[0][1].models.on, 'xai/grok-4.7');
+  assert.equal(healthPosts[0][1].models.paren, 'claude-sonnet');
+  assert.equal(healthPosts[0][1].models.off, undefined);
   const healthHTML = element('health-results').innerHTML;
-  assert.match(healthHTML, /verdict ok[\s\S]*?通过/);
-  assert.match(healthHTML, /verdict bad[\s\S]*?不通过/);
+  assert.match(healthHTML, /On[\s\S]*health-status[\s\S]*通过/);
+  assert.match(healthHTML, /Paren[\s\S]*health-status[\s\S]*不通过/);
+  assert.equal(healthHTML.includes('Off'), true);
+  assert.equal(healthHTML.includes('health-error'), false);
+  run(`toggleHealth('paren')`);
+  assert.match(element('health-results').innerHTML, /health-error[\s\S]*没有可用模型/);
   assert.equal(healthHTML.includes('credential_id'), false);
   run(`candySelected.add('a'); fingerprintSelected.add('a'); fingerprintExpanded.add('a'); showLogin('Expired')`);
   assert.equal(run(`credentials.length + candySelected.size + fingerprintSelected.size + fingerprintExpanded.size`), 0);

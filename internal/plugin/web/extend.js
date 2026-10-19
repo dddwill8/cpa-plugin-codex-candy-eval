@@ -60,30 +60,90 @@ function startOneClick(test) {
 }
 
 let healthResults = [];
+var healthChoice = new Map();
+const healthOpen = new Set();
+let healthCatalogs = {};
+let healthCatalogStamp = "";
+var healthCatalogTask = Promise.resolve();
 
-function healthVerdict(result) {
-  const verdict = result.passed ? statusPill("ok", "通过") : statusPill("bad", "不通过");
-  const detail = result.passed ? result.model : (result.error || result.model || "");
-  const credential = credentials.find((entry) => entry.id === result.credential_id);
-  return `<div class="health-row"><span class="name">${esc(credential?.name || result.credential_id)}</span>${verdict}<span class="meta mono">${esc(detail)}</span></div>`;
+function healthModelIDs(id) {
+  return listedModelIDs(healthCatalogs?.[id] || []).sort(compareModels);
+}
+
+function ensureHealthCatalogs() {
+  const stamp = credentials.map((credential) => credential.id).join("\0");
+  if (stamp === healthCatalogStamp) return;
+  healthCatalogStamp = stamp;
+  const ids = credentials.map((credential) => credential.id);
+  healthCatalogTask = (async () => {
+    try {
+      if (!ids.length) {
+        healthCatalogs = {};
+        return;
+      }
+      const raw = await modelCatalog(ids);
+      if (credentials.map((credential) => credential.id).join("\0") !== stamp) return;
+      healthCatalogs = raw || {};
+      renderHealth();
+    } catch (err) {
+      if (healthCatalogStamp === stamp) healthCatalogStamp = "";
+      if (err instanceof AuthError) showLogin(err.message);
+    }
+  })();
+}
+
+function healthStatus(result) {
+  if (!result) return `<span class="none">未检测</span>`;
+  return result.passed ? statusPill("ok", "通过") : statusPill("bad", "不通过");
+}
+
+function healthRow(credential) {
+  const models = healthModelIDs(credential.id);
+  const previous = healthChoice.get(credential.id);
+  const chosen = models.includes(previous) ? previous : (models[0] || "");
+  if (chosen) healthChoice.set(credential.id, chosen);
+  const result = healthResults.find((entry) => entry.credential_id === credential.id);
+  const options = models.map((id) => `<option value="${esc(id)}"${id === chosen ? " selected" : ""}>${esc(id)}</option>`).join("");
+  const open = healthOpen.has(credential.id);
+  const error = open ? `<div class="health-error">${esc(result?.error || (result ? "无报错信息" : "尚未检测"))}</div>` : "";
+  return `<div class="health-item${open ? " open" : ""}"><div class="health-row" data-health-toggle="${esc(credential.id)}"><span class="name">${esc(credential.name || credential.id)}</span><span class="native-select health-model"><select data-health-model="${esc(credential.id)}" aria-label="检测模型">${options}</select></span><span class="health-status">${healthStatus(result)}</span></div>${error}</div>`;
 }
 
 function renderHealth() {
   const root = $("health-results");
   if (!root) return;
-  root.innerHTML = healthResults.length
-    ? healthResults.map(healthVerdict).join("")
-    : `<div class="empty">对每张已启用凭证，用它的第一个模型发送 ${HEALTH_PROMPT}。</div>`;
+  ensureHealthCatalogs();
+  const html = credentials.length ? credentials.map(healthRow).join("") : `<div class="empty">没有凭证。</div>`;
+  if (root.healthHTML !== html) {
+    root.healthHTML = html;
+    root.innerHTML = html;
+  }
   const button = $("health-run");
   if (button) button.disabled = pending || !enabledCredentials().length;
+}
+
+function toggleHealth(id) {
+  healthOpen.has(id) ? healthOpen.delete(id) : healthOpen.add(id);
+  renderHealth();
+}
+
+function setHealthModel(id, model) {
+  healthChoice.set(id, model);
+  renderHealth();
 }
 
 function startHealth() {
   return update("健康检测失败", async () => {
     const ids = enabledCredentials().map((credential) => credential.id);
+    const catalog = await modelCatalog(ids);
+    const models = {};
+    for (const id of ids) {
+      const choice = healthChoice.get(id) || firstModel(catalog?.[id], false);
+      if (choice) models[id] = choice;
+    }
     const response = await api(`${BASE}/health/run`, {
       method: "POST",
-      body: { credential_ids: ids, model_catalog: await modelCatalog(ids) },
+      body: { credential_ids: ids, model_catalog: catalog, models },
     });
     healthResults = Array.isArray(response.results) ? response.results : [];
     const passed = healthResults.filter((result) => result.passed).length;
@@ -113,12 +173,25 @@ function wireExtend() {
   const upstreamShowLogin = showLogin;
   showLogin = function showLoginWithExtend(message) {
     healthResults = [];
+    healthChoice.clear();
+    healthOpen.clear();
+    healthCatalogs = {};
+    healthCatalogStamp = "";
     return upstreamShowLogin(message);
   };
   for (const test of ["candy", "fingerprint", "pelican"]) {
     $(test + "-one-click").addEventListener("click", () => startOneClick(test));
   }
   $("health-run").addEventListener("click", () => startHealth());
+  $("health-results").addEventListener("click", (e) => {
+    if (e.target.closest?.("select")) return;
+    const id = e.target.closest?.("[data-health-toggle]")?.getAttribute("data-health-toggle");
+    if (id) toggleHealth(id);
+  });
+  $("health-results").addEventListener("change", (e) => {
+    const id = e.target.getAttribute?.("data-health-model");
+    if (id) healthChoice.set(id, e.target.value);
+  });
   renderOneClick();
 }
 

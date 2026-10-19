@@ -223,6 +223,7 @@ func healthRunResponse(body []byte) managementResponse {
 		CredentialIDs []string            `json:"credential_ids"`
 		All           bool                `json:"all"`
 		ModelCatalog  map[string][]string `json:"model_catalog"`
+		Models        map[string]string   `json:"models"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		return jsonError(http.StatusBadRequest, "请求格式错误："+err.Error())
@@ -240,7 +241,7 @@ func healthRunResponse(body []byte) managementResponse {
 	results := make([]healthResult, len(auths))
 	var wg sync.WaitGroup
 	for i, auth := range auths {
-		model := firstModel(req.ModelCatalog[auth.ID], false)
+		model := healthModel(req.ModelCatalog[auth.ID], req.Models[auth.ID])
 		if model == "" {
 			results[i] = healthResult{CredentialID: auth.ID, Error: "没有可用模型"}
 			continue
@@ -253,6 +254,21 @@ func healthRunResponse(body []byte) managementResponse {
 	}
 	wg.Wait()
 	return jsonResponse(http.StatusOK, map[string]any{"results": results})
+}
+
+// healthModel uses the caller's choice when it is still in the filtered catalog.
+// An empty choice keeps the first filtered model.
+func healthModel(catalog []string, chosen string) string {
+	chosen = strings.TrimSpace(chosen)
+	if chosen == "" {
+		return firstModel(catalog, false)
+	}
+	for _, id := range listedModelIDs(catalog) {
+		if id == chosen {
+			return chosen
+		}
+	}
+	return ""
 }
 
 // healthTargets are enabled credentials, including ones CPA marks unavailable.

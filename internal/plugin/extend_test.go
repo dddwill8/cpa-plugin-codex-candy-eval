@@ -232,6 +232,45 @@ func TestHealthProbeUsesFirstModel(t *testing.T) {
 	}
 }
 
+func TestHealthUsesChosenModel(t *testing.T) {
+	setupTest(t)
+	calls := installExtendHost(t, func(string) (json.RawMessage, error) {
+		return mockModelResponse("hi there"), nil
+	})
+	response := postExtend(t, "/health/run", map[string]any{
+		"credential_ids": []string{"both", "alias"},
+		"model_catalog":  extendCatalog(),
+		"models":         map[string]string{"both": "xai/grok-4.7", "alias": "grok-4.7"},
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("health status %d: %s", response.StatusCode, response.Body)
+	}
+	var payload struct {
+		Results []healthResult `json:"results"`
+	}
+	if err := json.Unmarshal(response.Body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]healthResult{}
+	for _, result := range payload.Results {
+		byID[result.CredentialID] = result
+	}
+	if !byID["both"].Passed || byID["both"].Model != "xai/grok-4.7" {
+		t.Errorf("chosen model result = %+v", byID["both"])
+	}
+	if byID["alias"].Passed || byID["alias"].Error == "" {
+		t.Errorf("filtered bare id was accepted: %+v", byID["alias"])
+	}
+	for _, call := range *calls {
+		if call.ID == "alias" || call.Model != "xai/grok-4.7" || call.Prompt != healthPrompt {
+			t.Errorf("unexpected call %+v", call)
+		}
+	}
+	if len(*calls) == 0 {
+		t.Fatal("chosen model was not called")
+	}
+}
+
 func TestHealthStalledProbeFailsCredential(t *testing.T) {
 	if healthProbeBudget <= 0 || healthProbeBudget >= 30*time.Second {
 		t.Fatalf("health budget %s must finish before the page's 30s request timeout", healthProbeBudget)

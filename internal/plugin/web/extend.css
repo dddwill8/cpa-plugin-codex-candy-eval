@@ -1,9 +1,12 @@
 .toolbar-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: end; }
 .toolbar-actions > .btn { min-width: 138px; }
 #health-toolbar { --toolbar-columns: minmax(0, 1fr); }
-.health-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); }
-.health-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.health-row .verdict { flex: none; }
+.health-item + .health-item { border-top: 1px solid var(--line); }
+.health-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(140px, 1fr) auto; gap: 12px; align-items: center; padding: 12px 16px; cursor: pointer; }
+.health-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-model { min-width: 0; }
+.health-status { justify-self: end; }
+.health-error { margin: 0 16px 12px; color: var(--danger-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1000px) {
   .toolbar-actions { grid-column: 1 / -1; }
   .toolbar-actions > .btn { flex: 1; min-width: 0; }
