@@ -57,10 +57,10 @@ function panelKey() {
 
 class AuthError extends Error {}
 
-async function api(path, { method = "GET", body, apiKey, signal } = {}) {
-  const timeout = AbortSignal.timeout(30000);
+async function api(path, { method = "GET", body, apiKey, signal, timeout = 30000 } = {}) {
+  const deadline = AbortSignal.timeout(timeout);
   const requestKey = apiKey ?? key;
-  const init = { method, cache: "no-store", signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: { Authorization: "Bearer " + requestKey } };
+  const init = { method, cache: "no-store", signal: signal ? AbortSignal.any([signal, deadline]) : deadline, headers: { Authorization: "Bearer " + requestKey } };
   if (body !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);

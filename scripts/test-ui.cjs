@@ -144,6 +144,12 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
     assert.match(page, new RegExp(`id="${test}-one-click"[^>]*type="button"[^>]*>一键测试</button>`));
   }
   assert.equal(page.includes('id="health-one-click"'), false);
+  assert.equal(page.includes('开始检测'), false);
+  assert.match(page, /id="health-run"[^>]*>检测指定模型</);
+  assert.match(page, /id="health-run-all"[^>]*>全部检测</);
+  assert.match(page, /「测试全部」用本页的模型、推理强度和每凭证次数/);
+  assert.match(page, /「一键测试」不看勾选和下拉模型，每张已启用凭证用自己的第一个不含括号的模型/);
+  assert.match(page, /「全部检测」对每张已启用凭证的每个可用模型各发一次/);
   element('candy-model').value = '';
   element('fingerprint-model').value = '';
   element('pelican-model').value = '';
@@ -542,7 +548,10 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
         return {models:(extendCatalogs[name] || []).map((id) => ({id}))};
       }
       extendCalls.push([path, options.body]);
-      if (String(path).endsWith('/health/run')) return {results:[{credential_id:'on',model:'xai/grok-4.7',passed:true,text:'hi'},{credential_id:'paren',passed:false,error:'没有可用模型'}]};
+      if (String(path).endsWith('/health/run')) {
+        if (options.body?.all_models) return {results:[{credential_id:'on',model:'xai/grok-4.7',passed:true,text:'hi'},{credential_id:'on',model:'kept-bare',passed:false,error:'第二个模型失败'}]};
+        return {results:[{credential_id:'on',model:'xai/grok-4.7',passed:true,text:'hi'},{credential_id:'paren',passed:false,error:'没有可用模型'}]};
+      }
       return {started:1};
     }`);
   run(`EXTEND.wire()`);
@@ -589,6 +598,7 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.deepEqual(healthPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
   assert.equal(healthPosts[0][1].models.on, 'xai/grok-4.7');
   assert.equal(healthPosts[0][1].models.paren, 'claude-sonnet');
+  assert.equal(healthPosts[0][1].all_models, false);
   assert.equal(healthPosts[0][1].models.off, undefined);
   const healthHTML = element('health-results').innerHTML;
   assert.match(healthHTML, /On[\s\S]*health-status[\s\S]*通过/);
@@ -597,6 +607,16 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.equal(healthHTML.includes('health-error'), false);
   run(`toggleHealth('paren')`);
   assert.match(element('health-results').innerHTML, /health-error[\s\S]*没有可用模型/);
+  const allPosts = await posted('health-run-all');
+  assert.equal(allPosts.length, 1);
+  assert.equal(allPosts[0][1].all_models, true);
+  assert.deepEqual(allPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
+  run(`toggleHealth('on')`);
+  const allHTML = element('health-results').innerHTML;
+  assert.match(allHTML, /xai\/grok-4\.7/);
+  assert.match(allHTML, /kept-bare/);
+  assert.match(allHTML, /第二个模型失败/);
+  assert.match(allHTML, /不通过 1\/2/);
   assert.equal(healthHTML.includes('credential_id'), false);
   run(`candySelected.add('a'); fingerprintSelected.add('a'); fingerprintExpanded.add('a'); showLogin('Expired')`);
   assert.equal(run(`credentials.length + candySelected.size + fingerprintSelected.size + fingerprintExpanded.size`), 0);

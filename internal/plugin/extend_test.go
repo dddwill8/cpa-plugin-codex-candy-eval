@@ -271,6 +271,53 @@ func TestHealthUsesChosenModel(t *testing.T) {
 	}
 }
 
+func TestHealthAllModelsProbesEachFilteredModel(t *testing.T) {
+	setupTest(t)
+	calls := installExtendHost(t, func(string) (json.RawMessage, error) {
+		return mockModelResponse("hi there"), nil
+	})
+	response := postExtend(t, "/health/run", map[string]any{
+		"credential_ids": []string{"both", "image", "off"},
+		"model_catalog":  extendCatalog(),
+		"all_models":     true,
+		"models":         map[string]string{"both": "xai/grok-4.7"},
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("health status %d: %s", response.StatusCode, response.Body)
+	}
+	var payload struct {
+		Results []healthResult `json:"results"`
+	}
+	if err := json.Unmarshal(response.Body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, call := range *calls {
+		if call.Prompt != healthPrompt {
+			t.Errorf("prompt = %q", call.Prompt)
+		}
+		got[call.ID+" "+call.Model] = true
+	}
+	if !got["both openai/grok-4.7"] || !got["both xai/grok-4.7"] || got["both grok-4.7"] || len(got) != 2 {
+		t.Fatalf("calls = %#v", got)
+	}
+	var image healthResult
+	for _, result := range payload.Results {
+		if result.CredentialID == "image" {
+			image = result
+		}
+		if result.CredentialID == "off" {
+			t.Fatal("disabled credential was probed")
+		}
+	}
+	if image.Passed || image.Error == "" {
+		t.Fatalf("image-only credential = %+v", image)
+	}
+	if len(records.Candies) != 0 || len(records.Fingerprints) != 0 || len(records.Pelicans) != 0 {
+		t.Fatal("all-model health stored a graded test")
+	}
+}
+
 func TestHealthStalledProbeFailsCredential(t *testing.T) {
 	if healthProbeBudget <= 0 || healthProbeBudget >= 30*time.Second {
 		t.Fatalf("health budget %s must finish before the page's 30s request timeout", healthProbeBudget)

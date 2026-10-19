@@ -224,6 +224,7 @@ func healthRunResponse(body []byte) managementResponse {
 		All           bool                `json:"all"`
 		ModelCatalog  map[string][]string `json:"model_catalog"`
 		Models        map[string]string   `json:"models"`
+		AllModels     bool                `json:"all_models"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		return jsonError(http.StatusBadRequest, "请求格式错误："+err.Error())
@@ -236,21 +237,59 @@ func healthRunResponse(body []byte) managementResponse {
 	if len(auths) == 0 {
 		return jsonError(http.StatusBadRequest, "没有可检测的已启用凭证")
 	}
-	ctx, cancel := context.WithTimeout(runCtx, healthProbeBudget)
+	parent := runCtx
+	cancel := func() {}
+	if !req.AllModels {
+		// One model per credential runs together, and the page gives that request 30s.
+		parent, cancel = context.WithTimeout(runCtx, healthProbeBudget)
+	}
 	defer cancel()
-	results := make([]healthResult, len(auths))
-	var wg sync.WaitGroup
-	for i, auth := range auths {
-		model := healthModel(req.ModelCatalog[auth.ID], req.Models[auth.ID])
-		if model == "" {
-			results[i] = healthResult{CredentialID: auth.ID, Error: "没有可用模型"}
+	results := make([]healthResult, 0, len(auths))
+	type healthGroup struct {
+		auth    credential
+		models  []string
+		indexes []int
+	}
+	var groups []healthGroup
+	for _, auth := range auths {
+		models := []string{healthModel(req.ModelCatalog[auth.ID], req.Models[auth.ID])}
+		if req.AllModels {
+			models = listedModelIDs(req.ModelCatalog[auth.ID])
+			sort.SliceStable(models, func(i, j int) bool { return compareModels(models[i], models[j]) < 0 })
+		}
+		if len(models) == 0 || models[0] == "" {
+			results = append(results, healthResult{CredentialID: auth.ID, Error: "没有可用模型"})
 			continue
 		}
+		group := healthGroup{auth: auth, models: models}
+		for range models {
+			group.indexes = append(group.indexes, len(results))
+			results = append(results, healthResult{})
+		}
+		groups = append(groups, group)
+	}
+	var wg sync.WaitGroup
+	// One credential is probed one model at a time; different credentials share four slots.
+	limit := len(groups)
+	if req.AllModels && limit > 4 {
+		limit = 4
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	slots := make(chan struct{}, limit)
+	for _, group := range groups {
 		wg.Add(1)
-		go func(i int, auth credential, model string) {
+		go func(group healthGroup) {
 			defer wg.Done()
-			results[i] = probeHealth(ctx, auth, model)
-		}(i, auth, model)
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			for i, model := range group.models {
+				probeCtx, probeCancel := context.WithTimeout(parent, healthProbeBudget)
+				results[group.indexes[i]] = probeHealth(probeCtx, group.auth, model)
+				probeCancel()
+			}
+		}(group)
 	}
 	wg.Wait()
 	return jsonResponse(http.StatusOK, map[string]any{"results": results})

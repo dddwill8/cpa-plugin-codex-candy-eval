@@ -97,16 +97,29 @@ function healthStatus(result) {
   return result.passed ? statusPill("ok", "通过") : statusPill("bad", "不通过");
 }
 
+function healthSummary(results) {
+  if (!results.length) return healthStatus(null);
+  if (results.length === 1) return healthStatus(results[0]);
+  const passed = results.filter((result) => result.passed).length;
+  return statusPill(passed === results.length ? "ok" : "bad", `${passed === results.length ? "通过" : "不通过"} ${passed}/${results.length}`);
+}
+
+function healthDetail(results) {
+  if (!results.length) return `<div class="health-error">尚未检测</div>`;
+  if (results.length === 1) return `<div class="health-error">${esc(results[0].error || "无报错信息")}</div>`;
+  return results.map((result) => `<div class="health-model-line"><span class="mono">${esc(result.model || "未选模型")}</span>${healthStatus(result)}${result.error ? `<div class="health-error">${esc(result.error)}</div>` : ""}</div>`).join("");
+}
+
 function healthRow(credential) {
   const models = healthModelIDs(credential.id);
   const previous = healthChoice.get(credential.id);
   const chosen = models.includes(previous) ? previous : (models[0] || "");
   if (chosen) healthChoice.set(credential.id, chosen);
-  const result = healthResults.find((entry) => entry.credential_id === credential.id);
+  const results = healthResults.filter((entry) => entry.credential_id === credential.id);
   const options = models.map((id) => `<option value="${esc(id)}"${id === chosen ? " selected" : ""}>${esc(id)}</option>`).join("");
   const open = healthOpen.has(credential.id);
-  const error = open ? `<div class="health-error">${esc(result?.error || (result ? "无报错信息" : "尚未检测"))}</div>` : "";
-  return `<div class="health-item${open ? " open" : ""}"><div class="health-row" data-health-toggle="${esc(credential.id)}"><span class="name">${esc(credential.name || credential.id)}</span><span class="native-select health-model"><select data-health-model="${esc(credential.id)}" aria-label="检测模型">${options}</select></span><span class="health-status">${healthStatus(result)}</span></div>${error}</div>`;
+  const error = open ? `<div class="health-detail">${healthDetail(results)}</div>` : "";
+  return `<div class="health-item${open ? " open" : ""}"><div class="health-row" data-health-toggle="${esc(credential.id)}"><span class="name">${esc(credential.name || credential.id)}</span><span class="native-select health-model"><select data-health-model="${esc(credential.id)}" aria-label="检测模型">${options}</select></span><span class="health-status">${healthSummary(results)}</span></div>${error}</div>`;
 }
 
 function renderHealth() {
@@ -118,8 +131,10 @@ function renderHealth() {
     root.healthHTML = html;
     root.innerHTML = html;
   }
-  const button = $("health-run");
-  if (button) button.disabled = pending || !enabledCredentials().length;
+  for (const id of ["health-run", "health-run-all"]) {
+    const button = $(id);
+    if (button) button.disabled = pending || !enabledCredentials().length;
+  }
 }
 
 function toggleHealth(id) {
@@ -132,18 +147,23 @@ function setHealthModel(id, model) {
   renderHealth();
 }
 
-function startHealth() {
+function startHealth(allModels) {
   return update("健康检测失败", async () => {
     const ids = enabledCredentials().map((credential) => credential.id);
     const catalog = await modelCatalog(ids);
     const models = {};
+    let jobs = 0;
     for (const id of ids) {
-      const choice = healthChoice.get(id) || firstModel(catalog?.[id], false);
+      const available = listedModelIDs(catalog?.[id] || []).sort(compareModels);
+      jobs += Math.max(available.length, 1);
+      const choice = healthChoice.get(id) || available[0] || "";
       if (choice) models[id] = choice;
     }
+    const timeout = allModels ? Math.min(10 * 60 * 1000, Math.max(60000, Math.ceil(jobs / 4) * 25000)) : 30000;
     const response = await api(`${BASE}/health/run`, {
       method: "POST",
-      body: { credential_ids: ids, model_catalog: catalog, models },
+      timeout,
+      body: { credential_ids: ids, model_catalog: catalog, models, all_models: !!allModels },
     });
     healthResults = Array.isArray(response.results) ? response.results : [];
     const passed = healthResults.filter((result) => result.passed).length;
@@ -182,7 +202,8 @@ function wireExtend() {
   for (const test of ["candy", "fingerprint", "pelican"]) {
     $(test + "-one-click").addEventListener("click", () => startOneClick(test));
   }
-  $("health-run").addEventListener("click", () => startHealth());
+  $("health-run").addEventListener("click", () => startHealth(false));
+  $("health-run-all").addEventListener("click", () => startHealth(true));
   $("health-results").addEventListener("click", (e) => {
     if (e.target.closest?.("select")) return;
     const id = e.target.closest?.("[data-health-toggle]")?.getAttribute("data-health-toggle");

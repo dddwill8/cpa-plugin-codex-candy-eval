@@ -57,6 +57,7 @@
             <button id="candy-run-batch" class="btn" type="submit" disabled>测试全部</button>
           </div>
         </form>
+        <p class="run-note">「测试全部」用本页的模型、推理强度和每凭证次数，测已勾选的凭证；没勾选就测当前列表里可测的凭证。「一键测试」不看勾选、下拉模型和次数，每张已启用凭证用自己的第一个模型只跑 1 次，推理强度仍用本页当前值。</p>
 
         <div class="legend">
           <span><i data-icon="circle-check" data-class="mark ok"></i>答对</span>
@@ -89,6 +90,7 @@
             <button id="fingerprint-run-batch" class="btn" type="submit" disabled>测试全部</button>
           </div>
         </form>
+        <p class="run-note">「测试全部」用本页选择的模型，按每凭证并发，测已勾选的凭证；没勾选就测当前列表里可测的凭证。「一键测试」不看勾选和下拉模型，每张已启用凭证用自己的第一个不含括号的模型跑一次，并发仍用本页当前值。</p>
         <div class="legend"><span id="fingerprint-cost"></span></div>
         <section id="fingerprint-credentials" class="card"></section>
       </section>
@@ -110,6 +112,7 @@
             <button id="pelican-run-batch" class="btn" type="submit" disabled>测试全部</button>
           </div>
         </form>
+        <p class="run-note">「测试全部」用本页选择的模型和推理强度，测已勾选的凭证；没勾选就测当前列表里可测的凭证。「一键测试」不看勾选和下拉模型，每张已启用凭证用自己的第一个模型画一次，推理强度仍用本页当前值。</p>
         <div class="legend"><span>每个凭证 1 次请求（失败或没有 HTML 时重试）</span></div>
         <section id="pelican-credentials" class="card"></section>
       </section>
@@ -119,8 +122,12 @@
           <p>列出全部凭证。中间是本次调用的模型，默认是过滤后的第一个，可以改。右侧是通过或不通过，点击一行展开报错。</p>
         </div>
         <form id="health-toolbar" class="card toolbar">
-          <button id="health-run" class="btn" type="button">开始检测</button>
+          <div class="toolbar-actions">
+            <button id="health-run" class="btn" type="button">检测指定模型</button>
+            <button id="health-run-all" class="btn ghost" type="button">全部检测</button>
+          </div>
         </form>
+        <p class="run-note">「检测指定模型」对每张已启用凭证发送 say hi，模型用该行下拉框的当前值。「全部检测」对每张已启用凭证的每个可用模型各发一次。</p>
         <section id="health-results" class="card"></section>
       </section>
     </div>
