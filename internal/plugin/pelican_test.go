@@ -43,7 +43,8 @@ func TestPelicanRun(t *testing.T) {
 	}
 	tasks.Wait()
 	page, tool := pelicanResults["page"][0], pelicanResults["tool"][0]
-	if page.HTML != "<svg></svg>" || page.Error != "" || page.OutputTokens != 3 || tool.HTML != "" || tool.Error != "模型调用了工具，没有直接回答" {
+	// A turn that only calls a tool is asked again.
+	if page.HTML != "<svg></svg>" || page.Error != "" || page.Attempts != 1 || page.OutputTokens != 3 || tool.HTML != "" || tool.Error != "模型调用了工具，没有直接回答" || tool.Attempts != modelAttempts {
 		t.Fatalf("page = %+v, tool = %+v", page, tool)
 	}
 	// Lists carry summaries; the page loads with its record.

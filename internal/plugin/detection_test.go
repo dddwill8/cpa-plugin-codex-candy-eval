@@ -122,7 +122,7 @@ func detectionTestHost(t *testing.T, answer func() (string, int)) {
 		}
 		body, prompt := sentTurn(payload)
 		if body["reasoning"].(map[string]any)["effort"] != nil || !strings.Contains(prompt, "355") {
-			t.Error("unexpected probe parameters")
+			t.Error("unexpected challenge parameters")
 		}
 		text, status := answer()
 		if status != http.StatusOK {
@@ -135,21 +135,24 @@ func detectionTestHost(t *testing.T, answer func() (string, int)) {
 func TestDetectionRunAndPersistence(t *testing.T) {
 	setupTest(t)
 	var calls atomic.Int32
+	// The first challenge is refused on every attempt.
 	detectionTestHost(t, func() (string, int) {
-		if calls.Add(1) == 1 {
+		if calls.Add(1) <= modelAttempts {
 			return "无法回答", 200
 		}
 		return detectionAnswer, 200
 	})
 	candyResults["a"] = []candyResult{{Model: "preserved"}}
 	pelicanResults["a"] = []pelicanResult{{Model: "preserved"}}
-	response := detectionRunResponse([]byte(`{"all":true,"model":"test-model"}`))
+	response := detectionRunResponse([]byte(`{"all":true,"model":"test-model","concurrency":1}`))
 	if response.StatusCode != 200 {
 		t.Fatalf("run: %s", response.Body)
 	}
 	tasks.Wait()
 	r := detectionResults["a"][0]
-	if calls.Load() != 3 || r.Status != "partial" || r.Attribution.Decision != "partial" || r.Attribution.Prediction == "" || r.Attribution.Used != 2 || len(r.Samples) != 3 || r.Concurrency != 3 || r.InputTokens != 36 || r.OutputTokens != 9 || r.ReasoningTokens != 3 {
+	if calls.Load() != 5 || r.Status != "partial" || r.Attribution.Decision != "partial" || r.Attribution.Prediction == "" || r.Attribution.Used != 2 || len(r.Samples) != 3 ||
+		r.Samples[0].Attempts != modelAttempts || r.Samples[0].Error != "有效数字不足" || r.Samples[0].Text != "无法回答" ||
+		r.Concurrency != 1 || r.InputTokens != 60 || r.OutputTokens != 15 || r.ReasoningTokens != 5 {
 		t.Fatalf("result=%+v calls=%d", r, calls.Load())
 	}
 	if len(detectionResults["off"]) != 0 {
@@ -158,7 +161,7 @@ func TestDetectionRunAndPersistence(t *testing.T) {
 	detectionResults = map[string][]detectionResult{}
 	loaded = false
 	loadState()
-	if len(detectionResults["a"]) != 1 || detectionResults["a"][0].Attribution.Prediction != r.Attribution.Prediction || detectionResults["a"][0].ReasoningTokens != 3 || detectionResults["a"][0].InputTokens != 36 || detectionResults["a"][0].OutputTokens != 9 {
+	if len(detectionResults["a"]) != 1 || detectionResults["a"][0].Attribution.Prediction != r.Attribution.Prediction || detectionResults["a"][0].ReasoningTokens != 5 || detectionResults["a"][0].InputTokens != 60 || detectionResults["a"][0].OutputTokens != 15 {
 		t.Fatal("history did not survive reload")
 	}
 	if summary := r.summary(); summary.Samples != nil || summary.Attribution.Results != nil || summary.Attribution.Prediction != r.Attribution.Prediction || len(r.Samples) != 3 {
@@ -179,15 +182,20 @@ func TestDetectionRunAndPersistence(t *testing.T) {
 	}
 }
 
+// Refused answers are asked again; a rejected request is final.
 func TestDetectionLimitsAndHardFailure(t *testing.T) {
-	for status, reason := range map[int]string{200: "有效数字不足", 401: "拒答"} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		reason string
+		calls  int32
+	}{{200, "有效数字不足", detectionTarget * modelAttempts}, {401, "拒答", detectionTarget}} {
+		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
 			setupTest(t)
 			var calls atomic.Int32
-			detectionTestHost(t, func() (string, int) { calls.Add(1); return "拒答", status })
+			detectionTestHost(t, func() (string, int) { calls.Add(1); return "拒答", tc.status })
 			detectionRunResponse([]byte(`{"all":true,"model":"test-model"}`))
 			tasks.Wait()
-			if r := detectionResults["a"][0]; calls.Load() != detectionTarget || r.Status != "failed" || !strings.Contains(r.Error, reason) {
+			if r := detectionResults["a"][0]; calls.Load() != tc.calls || r.Status != "failed" || !strings.Contains(r.Error, tc.reason) {
 				t.Fatalf("calls=%d result=%+v", calls.Load(), r)
 			}
 		})
@@ -225,7 +233,7 @@ func TestDetectionStopDuringLastRequest(t *testing.T) {
 		answered           int64
 	}{
 		{"completed", strings.Repeat("42,", 320), "completed", 200, 3},
-		{"invalid_answer", "拒答", "partial", 200, 3},
+		{"invalid_answer", "拒答", "cancelled", 200, 3},
 		{"terminal_error", "", "partial", 401, 2},
 		{"interrupted_retry", "", "cancelled", 503, 2},
 	} {
@@ -271,7 +279,7 @@ func TestDetectionValidationAndHistoryProtection(t *testing.T) {
 	if r := clearHistoryResponse("detection"); r.StatusCode != 500 || len(detectionResults["a"]) != historyLimit {
 		t.Fatal("failed clear lost history")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(runCtx)
 	detectionRunning["a"] = &detectionProgress{cancel: cancel}
 	Quiesce()
 	if ctx.Err() == nil || detectionRunning["a"].Phase != "cancelling" {
@@ -308,7 +316,7 @@ func TestDetectionConcurrency(t *testing.T) {
 				case <-time.After(time.Second):
 					close(release)
 					tasks.Wait()
-					t.Fatal("configured probes did not start concurrently")
+					t.Fatal("configured challenges did not start concurrently")
 				}
 			}
 			select {

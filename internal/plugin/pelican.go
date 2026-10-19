@@ -1,7 +1,9 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -24,6 +26,7 @@ type pelicanResult struct {
 	Skipped         bool      `json:"skipped,omitempty"`
 	HTML            string    `json:"html,omitempty"`
 	Error           string    `json:"error,omitempty"`
+	Attempts        int       `json:"attempts,omitempty"`
 	InputTokens     int64     `json:"input_tokens"`
 	OutputTokens    int64     `json:"output_tokens"`
 	ReasoningTokens int64     `json:"reasoning_tokens"`
@@ -66,39 +69,51 @@ func pelicanRunResponse(body []byte) managementResponse {
 		},
 		func(auth credential) {
 			pelicanRunning[auth.ID] = true
-			go runPelican(auth, req.Model, req.Effort)
+			go runPelican(runCtx, auth, req.Model, req.Effort)
 		})
 }
 
-func runPelican(auth credential, model, effort string) {
+// runPelican records the page of one answer. Stopping ctx drops the run.
+func runPelican(ctx context.Context, auth credential, model, effort string) {
 	defer tasks.Done()
-	r := evaluatePelican(auth, model, effort)
+	r := evaluatePelican(ctx, auth, model, effort)
 	mu.Lock()
 	defer mu.Unlock()
-	pelicanResults[auth.ID] = appendRecent(pelicanResults[auth.ID], r)
 	delete(pelicanRunning, auth.ID)
-	_ = saveStateLocked()
+	if ctx.Err() == nil {
+		pelicanResults[auth.ID] = appendRecent(pelicanResults[auth.ID], r)
+		_ = saveStateLocked()
+	}
 }
 
-func evaluatePelican(auth credential, model, effort string) pelicanResult {
-	now := time.Now()
-	r := pelicanResult{ID: fmt.Sprint(now.UnixNano()), Time: now.UTC(), Model: model, Effort: effort}
-	out, elapsed, err := askCodex(auth, model, effort, pelicanPrompt)
-	r.DurationMS = elapsed.Milliseconds()
+func evaluatePelican(ctx context.Context, auth credential, model, effort string) pelicanResult {
+	started := time.Now()
+	r := pelicanResult{ID: fmt.Sprint(started.UnixNano()), Time: started.UTC(), Model: model, Effort: effort}
+	var page string
+	out, attempts, err := askCodex(ctx, auth, model, effort, "", pelicanPrompt, answerTimeout, func(answer string) (err error) {
+		page, err = pelicanPage(answer)
+		return err
+	})
+	r.DurationMS, r.Attempts = time.Since(started).Milliseconds(), attempts
 	r.InputTokens, r.OutputTokens, r.ReasoningTokens = out.InputTokens, out.OutputTokens, out.ReasoningTokens
 	if err != nil {
 		r.Error = truncate(err.Error(), 500)
 		return r
 	}
-	switch html := extractHTML(out.Answer); {
-	case html == "":
-		r.Error = "回答中没有 HTML 代码"
-	case len(html) > pelicanMaxHTML:
-		r.Error = fmt.Sprintf("HTML 超过 %d KB，未保存", pelicanMaxHTML>>10)
-	default:
-		r.HTML = html
-	}
+	r.HTML = page
 	return r
+}
+
+// pelicanPage returns the HTML page of an answer, or why the answer has none to keep.
+func pelicanPage(answer string) (string, error) {
+	switch html := extractHTML(answer); {
+	case html == "":
+		return "", errors.New("回答中没有 HTML 代码")
+	case len(html) > pelicanMaxHTML:
+		return "", fmt.Errorf("HTML 超过 %d KB，未保存", pelicanMaxHTML>>10)
+	default:
+		return html, nil
+	}
 }
 
 var codeBlock = regexp.MustCompile("(?s)```[ \\t]*([\\w-]*)[^\\n]*\\n(.*?)\\n[ \\t]*```")

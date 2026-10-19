@@ -99,7 +99,7 @@
           <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pl-effort" data-tip="none：不指定推理强度，由 CPA 决定；其他强度是否可用由 CPA 或上游判断"></select></span></label>
           <button id="pl-run-batch" class="btn" type="submit" disabled>测试全部</button>
         </form>
-        <div class="legend"><span>每个凭证 1 次请求</span></div>
+        <div class="legend"><span>每个凭证 1 次请求（失败或没有 HTML 时重试）</span></div>
         <section id="pl-credentials" class="card"></section>
       </section>
     </div>

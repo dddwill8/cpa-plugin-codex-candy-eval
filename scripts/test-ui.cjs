@@ -209,6 +209,8 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert(zeroCard.includes('输入 Token 0'));
   assert(zeroCard.includes('输出 Token 0'));
   assert(!zeroCard.includes('推理 Token'));
+  assert(!zeroCard.includes('重试'));
+  assert(run(`historyCard({duration_ms:0,attempts:3}, '')`).includes('aria-label="重试 2 次"'));
   for (const [renderer, runningKey, type] of [['renderDetectionRow','detection_running','dt']]) {
     const markup = run(`${renderer}(${JSON.stringify({...historyCredential,[runningKey]:{phase:'cancelling',model:'test',done:2,total:3}})})`);
     assert(markup.includes('正在停止'));

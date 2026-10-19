@@ -16,6 +16,7 @@ const ICONS = {
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/>',
   astroid: '<path d="M12.983 21.186a1 1 0 0 1-1.966 0 10 10 0 0 0-8.203-8.203 1 1 0 0 1 0-1.966 10 10 0 0 0 8.203-8.203 1 1 0 0 1 1.966 0 10 10 0 0 0 8.203 8.203 1 1 0 0 1 0 1.966 10 10 0 0 0-8.203 8.203"/>',
   "rotate-cw": '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   "circle-check": '<circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/>',
   "circle-x": '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
   "circle-alert": '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
@@ -67,7 +68,8 @@ const metrics = (r) =>
   metric("clock", "耗时", r.duration_ms != null ? fmtSec(r.duration_ms) : "—") +
   metric("square-arrow-right-enter", "输入 Token", r.input_tokens != null ? fmtNum(r.input_tokens) : "—") +
   metric("square-arrow-right-exit", "输出 Token", r.output_tokens != null ? fmtNum(r.output_tokens) : "—") +
-  (r.reasoning_tokens > 0 ? metric("brain", "推理 Token", fmtNum(r.reasoning_tokens)) : "");
+  (r.reasoning_tokens > 0 ? metric("brain", "推理 Token", fmtNum(r.reasoning_tokens)) : "") +
+  (r.attempts > 1 ? metric("repeat", "重试", `${r.attempts - 1} 次`) : "");
 
 // Codex plans in sort order, labelled like the official Codex client.
 // Badges follow CPAMC: platinum for top Pro plans, gold for Pro 100 and Business Premium.

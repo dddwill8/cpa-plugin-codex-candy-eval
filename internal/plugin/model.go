@@ -26,82 +26,86 @@ func validModelName(model string, allowEffort bool) bool {
 		(allowEffort || !strings.ContainsAny(model, "()"))
 }
 
-func retryableModelStatus(status int) bool {
-	return status == 0 || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
-}
-
-// Time limits of a model request, as a model stuck repeating itself streams until the upstream cuts it off.
-// Probes normally answer within a minute.
+// Time limits of an attempt, as a model stuck repeating itself streams until the upstream cuts it off.
+// Detection challenges normally answer within a minute.
 const (
-	probeTimeout  = 3 * time.Minute
-	answerTimeout = 10 * time.Minute
+	challengeTimeout = 3 * time.Minute
+	answerTimeout    = 10 * time.Minute
 )
 
-func withModelTimeout(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeoutCause(ctx, limit, fmt.Errorf("模型 %d 分钟内未完成回答，已中断请求", int(limit.Minutes())))
-}
+// A request is sent at most modelAttempts times. The first retry waits retryDelay, each later one twice as
+// long.
+const modelAttempts = 3
 
-// Collection probes retry the same request at most twice, after 2s and 4s.
-// Invalid model answers are evaluated by the caller and do not trigger retries.
-func executeProbe(ctx context.Context, auth credential, model string, body any, headers http.Header, slots chan struct{}) (out modelResponse, attempts int, err error) {
-	for attempt := 0; attempt < 3; attempt++ {
-		if ctx.Err() != nil {
-			return out, attempts, ctx.Err()
-		}
-		select {
-		case slots <- struct{}{}:
-		case <-ctx.Done():
-			return out, attempts, ctx.Err()
-		}
-		var status int
-		func() {
-			defer func() { <-slots }()
-			if ctx.Err() != nil {
-				err = ctx.Err()
-				return
-			}
-			attempts++
-			requestCtx, cancel := withModelTimeout(ctx, probeTimeout)
-			defer cancel()
-			var response modelResponse
-			response, status, err = executeModel(requestCtx, auth, model, body, headers)
-			out.Answer = response.Answer
-			out.InputTokens += response.InputTokens
-			out.OutputTokens += response.OutputTokens
-			out.ReasoningTokens += response.ReasoningTokens
-		}()
-		if err == nil || !retryableModelStatus(status) || attempt == 2 {
+var retryDelay = 2 * time.Second
+
+// retryableError marks a failure that sending the request again may avoid.
+type retryableError struct{ error }
+
+func (e retryableError) Unwrap() error { return e.error }
+
+// askCodex sends prompt as a new Codex turn on auth and returns the first answer accept takes; a nil accept
+// takes any answer. Effort "none" leaves the reasoning effort to CPA. Each attempt has limit to finish. The
+// response sums the usage of all attempts and holds the last answer.
+//
+// CPA retries a request on its pinned credential until output starts (request-retry) and waits out short
+// cooldowns (max-retry-interval). A rejection that still reaches the plugin is retried only when it is a
+// timeout or server error; 429 means the credential is cooling down or out of quota. CPA cannot retry a
+// stream it has started, so any later failure is retried: a broken or overlong stream, a response that
+// failed or did not answer in text, and an answer accept rejects.
+func askCodex(ctx context.Context, auth credential, model, effort, instructions, prompt string, limit time.Duration, accept func(answer string) error) (out modelResponse, attempts int, err error) {
+	if effort == "none" {
+		effort = ""
+	}
+	body, headers := codexTurn(auth.ID, model, effort, instructions, prompt)
+	timeout := fmt.Errorf("模型 %d 分钟内未完成回答，已中断请求", int(limit.Minutes()))
+	for delay := retryDelay; ; delay *= 2 {
+		if err = ctx.Err(); err != nil {
 			return
 		}
-		timer := time.NewTimer(time.Duration(2<<attempt) * time.Second)
+		attempts++
+		requestCtx, cancel := context.WithTimeoutCause(ctx, limit, timeout)
+		var response modelResponse
+		response, err = executeModel(requestCtx, auth, model, body, headers)
+		cancel()
+		out.Answer = response.Answer
+		out.InputTokens += response.InputTokens
+		out.OutputTokens += response.OutputTokens
+		out.ReasoningTokens += response.ReasoningTokens
+		if err == nil && accept != nil {
+			if err = accept(response.Answer); err != nil {
+				err = retryableError{err}
+			}
+		}
+		if err == nil || attempts == modelAttempts || !errors.As(err, new(retryableError)) {
+			return
+		}
 		select {
-		case <-timer.C:
+		case <-time.After(delay):
 		case <-ctx.Done():
-			timer.Stop()
 			return out, attempts, ctx.Err()
 		}
 	}
-	return
 }
 
 // executeModel sends a streaming Responses request body with headers on auth's provider; CPA translates
-// it to the provider's own protocol. When ctx ends first, the request is abandoned with ctx's cause. On
-// failure, status is the upstream HTTP status, or 0 when no complete response arrived.
-func executeModel(ctx context.Context, auth credential, model string, body any, headers http.Header) (result modelResponse, status int, err error) {
+// it to the provider's own protocol. When ctx ends first, the request is abandoned with ctx's cause. A
+// failure another attempt may avoid is a retryableError, as askCodex explains.
+func executeModel(ctx context.Context, auth credential, model string, body any, headers http.Header) (result modelResponse, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("模型请求异常：%v", recovered)
 		}
 	}()
 	if strings.TrimSpace(auth.ID) == "" || strings.TrimSpace(auth.Provider) == "" {
-		return result, 0, fmt.Errorf("缺少凭证 ID 或提供商，无法指定凭证")
+		return result, fmt.Errorf("缺少凭证 ID 或提供商，无法指定凭证")
 	}
 	// Keep <, > and & literal, as Codex sends them.
 	var request bytes.Buffer
 	encoder := json.NewEncoder(&request)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(body); err != nil {
-		return result, 0, err
+		return result, err
 	}
 	raw, err := hostCall("host.model.execute_stream", map[string]any{
 		"entry_protocol": "openai-response", "exit_protocol": "openai-response",
@@ -109,17 +113,17 @@ func executeModel(ctx context.Context, auth credential, model string, body any, 
 		"forced_provider": auth.Provider, "auth_id": auth.ID,
 	})
 	if err != nil {
-		var hostError *EnvelopeError
-		if errors.As(err, &hostError) {
-			return result, hostError.HTTPStatus, err
+		var rejected *EnvelopeError
+		if errors.As(err, &rejected) && (rejected.HTTPStatus == http.StatusRequestTimeout || rejected.HTTPStatus >= http.StatusInternalServerError) {
+			err = retryableError{err}
 		}
-		return result, 0, err
+		return result, err
 	}
 	var stream struct {
 		ID string `json:"stream_id"`
 	}
 	if err := json.Unmarshal(raw, &stream); err != nil || stream.ID == "" {
-		return result, 0, fmt.Errorf("解析 CPA 响应失败：%s", raw)
+		return result, fmt.Errorf("解析 CPA 响应失败：%s", raw)
 	}
 	// The host closes a stream by itself only once it is read to the end. Closing it early ends the pending
 	// read and cancels the upstream request.
@@ -128,17 +132,26 @@ func executeModel(ctx context.Context, auth credential, model string, body any, 
 	stop := context.AfterFunc(ctx, closeStream)
 	defer stop()
 	out, err := readResponseStream(stream.ID)
-	if err != nil {
-		if ctx.Err() != nil {
-			err = context.Cause(ctx)
-		}
-		return result, 0, err
+	switch {
+	case err != nil && ctx.Err() != nil:
+		err = context.Cause(ctx)
+	case err == nil:
+		result, err = answerOf(out)
 	}
+	if err != nil {
+		err = retryableError{err}
+	}
+	return result, err
+}
+
+// answerOf returns the answer text and usage of a final response. Any final response reports usage,
+// complete or not.
+func answerOf(out responseBody) (result modelResponse, err error) {
 	result.InputTokens = out.Usage.InputTokens
 	result.OutputTokens = out.Usage.OutputTokens
 	result.ReasoningTokens = out.Usage.OutputTokensDetails.ReasoningTokens
 	if (out.Status != "" && out.Status != "completed") || (len(out.Error) > 0 && string(out.Error) != "null") {
-		return result, http.StatusOK, fmt.Errorf("模型响应未完成（%s）：%s", out.Status, out.Error)
+		return result, fmt.Errorf("模型响应未完成（%s）：%s", out.Status, out.Error)
 	}
 	var answer strings.Builder
 	for _, item := range out.Output {
@@ -151,15 +164,15 @@ func executeModel(ctx context.Context, auth credential, model string, body any, 
 			}
 		}
 	}
-	result.Answer = answer.String()
-	if strings.TrimSpace(result.Answer) == "" {
+	if strings.TrimSpace(answer.String()) == "" {
 		// Codex turns list tools, and items such as function_call or custom_tool_call request one.
 		if slices.ContainsFunc(out.Output, func(item responseItem) bool { return strings.HasSuffix(item.Type, "_call") }) {
-			return result, http.StatusOK, fmt.Errorf("模型调用了工具，没有直接回答")
+			return result, fmt.Errorf("模型调用了工具，没有直接回答")
 		}
-		return result, http.StatusOK, fmt.Errorf("模型未返回文本")
+		return result, fmt.Errorf("模型未返回文本")
 	}
-	return result, http.StatusOK, nil
+	result.Answer = answer.String()
+	return result, nil
 }
 
 type responseItem struct {

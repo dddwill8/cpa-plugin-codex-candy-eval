@@ -52,7 +52,7 @@ function renderDetectionRow(a) {
 function renderDetection() {
   renderSelection("dt-", dtSelected, "测试");
   const selected = selectedCredentials(dtSelected).filter(availableCredential);
-  $("dt-cost").textContent = `每个凭证 ${DT_CONFIG.requests} 次请求（失败会重试）${selected.length ? ` · 已选 ${selected.length} 个，共 ${DT_CONFIG.requests * selected.length} 次` : ""}`;
+  $("dt-cost").textContent = `每个凭证 ${DT_CONFIG.requests} 次请求（失败或数字不足时重试）${selected.length ? ` · 已选 ${selected.length} 个，共 ${DT_CONFIG.requests * selected.length} 次` : ""}`;
   $("dt-clear").disabled = pending || !credentials.some((a) => a.detections?.length);
   renderList("dt-", renderDetectionRow);
 }

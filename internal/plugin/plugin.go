@@ -2,6 +2,7 @@
 package plugin
 
 import (
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -100,9 +101,11 @@ var uiHTML = func() []byte {
 const logoSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#72787c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><style>@media (prefers-color-scheme: dark) { :root { stroke: #9c9d9b; } }</style><path d="M10 7v10.9"/><path d="M14 6.1V17"/><path d="M16 7V3a1 1 0 0 1 1.707-.707 2.5 2.5 0 0 0 2.152.717 1 1 0 0 1 1.131 1.131 2.5 2.5 0 0 0 .717 2.152A1 1 0 0 1 21 8h-4"/><path d="M16.536 7.465a5 5 0 0 0-7.072 0l-2 2a5 5 0 0 0 0 7.07 5 5 0 0 0 7.072 0l2-2a5 5 0 0 0 0-7.07"/><path d="M8 17v4a1 1 0 0 1-1.707.707 2.5 2.5 0 0 0-2.152-.717 1 1 0 0 1-1.131-1.131 2.5 2.5 0 0 0-.717-2.152A1 1 0 0 1 3 16h4"/></svg>`
 
 var (
-	mu        sync.Mutex
-	tasks     sync.WaitGroup
-	quiescing bool
+	mu    sync.Mutex
+	tasks sync.WaitGroup
+	// runCtx carries every test run. Quiescing the plugin ends it, which stops the runs, and resuming renews
+	// it.
+	runCtx, stopRuns = context.WithCancel(context.Background())
 )
 
 type Envelope struct {
@@ -142,7 +145,9 @@ func HandleMethod(method string, request []byte) (response []byte) {
 	case "plugin.register", "plugin.reconfigure":
 		loadState()
 		mu.Lock()
-		quiescing = false
+		if runCtx.Err() != nil {
+			runCtx, stopRuns = context.WithCancel(context.Background())
+		}
 		mu.Unlock()
 		return okEnvelope(map[string]any{
 			"schema_version": schemaVersion,
@@ -278,10 +283,9 @@ func summaries[T interface{ summary() T }](records []T) []T {
 
 func Quiesce() {
 	mu.Lock()
-	quiescing = true
+	stopRuns()
 	for _, p := range detectionRunning {
 		p.Phase = "cancelling"
-		p.cancel()
 	}
 	mu.Unlock()
 	tasks.Wait()

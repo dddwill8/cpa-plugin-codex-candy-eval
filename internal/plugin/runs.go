@@ -15,8 +15,8 @@ type runSummary struct {
 }
 
 // startRuns starts a test on each selected credential that is idle. Credentials whose model list lacks
-// model get skip instead. Both callbacks run with mu held; start must launch a goroutine that calls
-// tasks.Done.
+// model get skip instead. Both callbacks run with mu held; start must launch a goroutine that runs under
+// runCtx and calls tasks.Done.
 func startRuns(authIDs []string, all bool, catalog map[string][]string, model string, skip func(id string), start func(auth credential)) managementResponse {
 	auths, err := selectedCredentials(authIDs, all)
 	if err != nil {
@@ -27,7 +27,7 @@ func startRuns(authIDs []string, all bool, catalog map[string][]string, model st
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if quiescing {
+	if runCtx.Err() != nil {
 		return jsonError(http.StatusServiceUnavailable, "插件正在停止，请稍后重试")
 	}
 	summary := runSummary{}

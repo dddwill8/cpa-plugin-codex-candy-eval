@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -183,19 +182,6 @@ func codexTurn(authID, model, effort, instructions, prompt string) (codexRequest
 		"X-Openai-Internal-Codex-Responses-Lite": {"true"},
 	}
 	return request, headers
-}
-
-// askCodex sends prompt as a new Codex turn on auth. Effort "none" leaves the reasoning effort to CPA.
-func askCodex(auth credential, model, effort, prompt string) (out modelResponse, elapsed time.Duration, err error) {
-	if effort == "none" {
-		effort = ""
-	}
-	body, headers := codexTurn(auth.ID, model, effort, "", prompt)
-	ctx, cancel := withModelTimeout(context.Background(), answerTimeout)
-	defer cancel()
-	start := time.Now()
-	out, _, err = executeModel(ctx, auth, model, body, headers)
-	return out, time.Since(start), err
 }
 
 // codexPrefix builds the tools and base instructions items Codex puts first in every request, with

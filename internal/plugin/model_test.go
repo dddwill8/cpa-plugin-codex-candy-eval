@@ -15,11 +15,12 @@ import (
 )
 
 // streamHost fakes the host's model streams on top of host: host.model.execute_stream streams the
-// Responses object that host returns for it as one response.completed event.
+// Responses object that host returns for it as one response.completed event. A nil object streams nothing
+// until the stream is closed, like a stalled upstream.
 func streamHost(host func(method string, payload any) (json.RawMessage, error)) func(string, any) (json.RawMessage, error) {
 	var mu sync.Mutex
 	var next int
-	streams := map[string][]byte{}
+	streams, closed := map[string][]byte{}, map[string]chan struct{}{}
 	return func(method string, payload any) (json.RawMessage, error) {
 		switch method {
 		case "host.model.stream_read":
@@ -28,8 +29,14 @@ func streamHost(host func(method string, payload any) (json.RawMessage, error)) 
 			event, open := streams[id]
 			delete(streams, id)
 			mu.Unlock()
+			if open && event == nil {
+				<-closed[id]
+			}
 			return json.Marshal(map[string]any{"payload": event, "done": !open})
 		case "host.model.stream_close":
+			mu.Lock()
+			close(closed[payload.(map[string]any)["stream_id"].(string)])
+			mu.Unlock()
 			return json.RawMessage(`{}`), nil
 		}
 		raw, err := host(method, payload)
@@ -39,7 +46,10 @@ func streamHost(host func(method string, payload any) (json.RawMessage, error)) 
 		mu.Lock()
 		next++
 		id := strconv.Itoa(next)
-		streams[id] = fmt.Appendf(nil, `data: {"type":"response.completed","response":%s}`, raw)
+		streams[id], closed[id] = nil, make(chan struct{})
+		if raw != nil {
+			streams[id] = fmt.Appendf(nil, `data: {"type":"response.completed","response":%s}`, raw)
+		}
 		mu.Unlock()
 		return json.Marshal(map[string]any{"stream_id": id})
 	}
@@ -75,61 +85,67 @@ func TestRunModelValidation(t *testing.T) {
 	}
 }
 
-func TestDetectionRetriesSameProbe(t *testing.T) {
-	setupTest(t)
-	var calls atomic.Int32
-	detectionTestHost(t, func() (string, int) {
-		switch calls.Add(1) {
-		case 1:
-			return "busy", 429
-		case 2:
-			return "unavailable", 503
-		default:
-			return strings.Repeat("42,", 320), 200
-		}
-	})
-	call := hostCall
-	var prompts []string
-	hostCall = func(method string, payload any) (json.RawMessage, error) {
-		if method == "host.model.execute_stream" {
-			_, prompt := sentTurn(payload)
-			prompts = append(prompts, prompt)
-		}
-		return call(method, payload)
-	}
-	detectionRunResponse([]byte(`{"all":true,"model":"test-model","concurrency":1}`))
-	tasks.Wait()
-	r := detectionResults["a"][0]
-	if calls.Load() != 5 || len(r.Samples) != 3 || r.Samples[0].Attempts != 3 || r.Status != "completed" || r.InputTokens != 36 || r.OutputTokens != 9 || r.ReasoningTokens != 3 {
-		t.Fatalf("requests=%d, result=%+v", calls.Load(), r)
-	}
-	if prompts[0] != prompts[1] || prompts[0] != prompts[2] || prompts[2] == prompts[3] {
-		t.Fatal("retries must reuse the same prompt; new probes must be independent")
+// Each attempt gets the next reply: a status CPA rejects the request with, an answer, a final response, or
+// nil for a stream that stalls past the time limit. Every reply but the last one is worth a retry.
+func TestAskCodexRetries(t *testing.T) {
+	failed := json.RawMessage(`{"status":"failed","output":[],"usage":{"input_tokens":12}}`)
+	for _, tc := range []struct {
+		name    string
+		replies []any
+		input   int64
+	}{
+		{"server_error_and_stall", []any{503, nil, "21"}, 12},
+		{"failed_response_and_rejected_answer", []any{failed, "拒答", "21"}, 36},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupTest(t)
+			var bodies []string
+			hostCall = streamHost(func(_ string, payload any) (json.RawMessage, error) {
+				bodies = append(bodies, string(payload.(map[string]any)["body"].([]byte)))
+				switch reply := tc.replies[len(bodies)-1].(type) {
+				case int:
+					return nil, &EnvelopeError{Code: "upstream", Message: "rejected", HTTPStatus: reply}
+				case string:
+					return mockModelResponse(reply), nil
+				case json.RawMessage:
+					return reply, nil
+				}
+				return nil, nil
+			})
+			accept := func(answer string) error {
+				if answer != "21" {
+					return errors.New("答错")
+				}
+				return nil
+			}
+			out, attempts, err := askCodex(context.Background(), credential{ID: "a", Provider: "codex"}, "m", "", "", "q", 20*time.Millisecond, accept)
+			if attempts != modelAttempts || err != nil || out.Answer != "21" || out.InputTokens != tc.input {
+				t.Fatalf("attempts=%d out=%+v err=%v", attempts, out, err)
+			}
+			for _, body := range bodies {
+				if body != bodies[0] {
+					t.Fatal("a retry must resend the same turn")
+				}
+			}
+		})
 	}
 }
 
-func TestProbeRetryLimitAndCancellation(t *testing.T) {
+func TestAskCodexStops(t *testing.T) {
 	setupTest(t)
-	var calls atomic.Int32
-	detectionTestHost(t, func() (string, int) { calls.Add(1); return "busy", 429 })
-	auth := credential{ID: "a", Provider: "codex"}
-	body, headers := codexTurn(auth.ID, "test-model", "", "", detectionSuite[0].Prompt)
-	slots := make(chan struct{}, 1)
-	_, attempts, err := executeProbe(context.Background(), auth, "test-model", body, headers, slots)
-	if err == nil || attempts != 3 || calls.Load() != 3 || len(slots) != 0 {
-		t.Fatalf("retry limit: attempts=%d calls=%d err=%v", attempts, calls.Load(), err)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	detectionTestHost(t, func() (string, int) { cancel(); return "busy", 429 })
-	_, attempts, err = executeProbe(ctx, auth, "test-model", body, headers, slots)
-	if err != context.Canceled || attempts != 1 || len(slots) != 0 {
-		t.Fatalf("cancelled retry: attempts=%d err=%v", attempts, err)
-	}
-	// A cancelled request must not wait for or consume a collection slot.
-	slots <- struct{}{}
-	_, attempts, err = executeProbe(ctx, auth, "test-model", body, headers, slots)
-	if err != context.Canceled || attempts != 0 || len(slots) != 1 {
-		t.Fatalf("cancelled queue: attempts=%d err=%v", attempts, err)
+	var calls atomic.Int32
+	hostCall = streamHost(func(string, any) (json.RawMessage, error) {
+		calls.Add(1)
+		cancel()
+		return nil, &EnvelopeError{Code: "upstream", Message: "busy", HTTPStatus: 503}
+	})
+	auth := credential{ID: "a", Provider: "codex"}
+	// Stopping during a retry wait, and before the first attempt.
+	for _, want := range []int{1, 0} {
+		if _, attempts, err := askCodex(ctx, auth, "m", "", "", "q", challengeTimeout, nil); attempts != want || err != context.Canceled || calls.Load() != 1 {
+			t.Fatalf("attempts=%d calls=%d err=%v", attempts, calls.Load(), err)
+		}
 	}
 }
 
@@ -141,11 +157,12 @@ func TestExecuteModel(t *testing.T) {
 	final := func(event, status, output string) string {
 		return `data: {"type":"` + event + `","response":{"status":"` + status + `","output":[` + output + `],` + usage + `}}`
 	}
+	// Every failure after the stream opens is retryable; usage comes with any final response.
 	for _, tc := range []struct {
 		name, answer string
 		chunks       []string
 		broken       string
-		status       int
+		usage        bool
 	}{
 		// Chunks split lines and skip line breaks; the answer arrives only as output items.
 		{"split", "答案是 21", []string{
@@ -153,13 +170,13 @@ func TestExecuteModel(t *testing.T) {
 			`data: {"type":"response.output_item.done","item":{"type":"reasoning"}}`,
 			`data: {"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"答案是 "},{"type":"output_text","text":"2`,
 			`1"}]}}`, final("response.completed", "completed", ""),
-		}, "", 200},
-		{"incomplete", "", []string{final("response.incomplete", "incomplete", answer("21"))}, "", 200},
-		{"failed", "", []string{final("response.failed", "failed", "")}, "", 200},
-		{"blank", "", []string{final("response.completed", "completed", answer(` \n`))}, "", 200},
-		{"error_event", "", []string{`data: {"type":"error","message":"quota exhausted"}`}, "", 0},
-		{"unfinished", "", []string{`data: {"type":"response.output_text.delta","delta":"21"}`}, "", 0},
-		{"interrupted", "", []string{`data: {"type":"response.created"}`}, "upstream reset", 0},
+		}, "", true},
+		{"incomplete", "", []string{final("response.incomplete", "incomplete", answer("21"))}, "", true},
+		{"failed", "", []string{final("response.failed", "failed", "")}, "", true},
+		{"blank", "", []string{final("response.completed", "completed", answer(` \n`))}, "", true},
+		{"error_event", "", []string{`data: {"type":"error","message":"quota exhausted"}`}, "", false},
+		{"unfinished", "", []string{`data: {"type":"response.output_text.delta","delta":"21"}`}, "", false},
+		{"interrupted", "", []string{`data: {"type":"response.created"}`}, "upstream reset", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupTest(t)
@@ -185,35 +202,37 @@ func TestExecuteModel(t *testing.T) {
 				chunks = chunks[1:]
 				return json.Marshal(map[string]any{"payload": []byte(chunk)})
 			}
-			out, status, err := executeModel(context.Background(), credential{ID: "a", Provider: "claude"}, "m", map[string]string{"input": "<q>"}, http.Header{"Originator": {"codex-tui"}})
-			if (err == nil) != (tc.answer != "") || (err == nil && out.Answer != tc.answer) || status != tc.status || closed != 1 {
-				t.Fatalf("answer=%q status=%d err=%v closed=%d", out.Answer, status, err, closed)
+			out, err := executeModel(context.Background(), credential{ID: "a", Provider: "claude"}, "m", map[string]string{"input": "<q>"}, http.Header{"Originator": {"codex-tui"}})
+			if (err == nil) != (tc.answer != "") || out.Answer != tc.answer || (err != nil && !errors.As(err, new(retryableError))) || closed != 1 {
+				t.Fatalf("answer=%q err=%v closed=%d", out.Answer, err, closed)
 			}
-			// Any final response reports usage, complete or not.
-			if got := [3]int64{out.InputTokens, out.OutputTokens, out.ReasoningTokens}; (got == [3]int64{5, 2, 1}) != (status == 200) {
+			if got := [3]int64{out.InputTokens, out.OutputTokens, out.ReasoningTokens}; (got == [3]int64{5, 2, 1}) != tc.usage {
 				t.Fatalf("usage = %v", got)
 			}
 		})
 	}
 
+	// CPA has already retried what it rejects; only timeouts and server errors may clear up.
 	setupTest(t)
 	auth := credential{ID: "a", Provider: "claude"}
-	hostCall = func(string, any) (json.RawMessage, error) {
-		return nil, &EnvelopeError{Code: "upstream", Message: "busy", HTTPStatus: 429}
-	}
-	if _, status, err := executeModel(context.Background(), auth, "m", nil, nil); err == nil || status != 429 {
-		t.Fatalf("rejected request: status=%d err=%v", status, err)
+	for status, retryable := range map[int]bool{401: false, 429: false, 408: true, 503: true} {
+		hostCall = func(string, any) (json.RawMessage, error) {
+			return nil, &EnvelopeError{Code: "upstream", Message: "busy", HTTPStatus: status}
+		}
+		if _, err := executeModel(context.Background(), auth, "m", nil, nil); err == nil || errors.As(err, new(retryableError)) != retryable {
+			t.Fatalf("rejected with %d: err=%v", status, err)
+		}
 	}
 	hostCall = func(string, any) (json.RawMessage, error) { panic("host down") }
-	if _, _, err := executeModel(context.Background(), auth, "m", nil, nil); err == nil {
-		t.Fatal("host panic was not reported")
+	if _, err := executeModel(context.Background(), auth, "m", nil, nil); err == nil || errors.As(err, new(retryableError)) {
+		t.Fatal("host panic was not reported as final")
 	}
 	hostCall = func(string, any) (json.RawMessage, error) {
 		t.Fatal("unpinned request reached the host")
 		return nil, nil
 	}
 	for _, unpinned := range []credential{{ID: "a"}, {Provider: "claude"}} {
-		if _, _, err := executeModel(context.Background(), unpinned, "m", nil, nil); err == nil {
+		if _, err := executeModel(context.Background(), unpinned, "m", nil, nil); err == nil {
 			t.Fatal("unpinned request accepted")
 		}
 	}
@@ -236,7 +255,7 @@ func TestExecuteModelAbandonsStream(t *testing.T) {
 	timeout := errors.New("timed out")
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Millisecond, timeout)
 	defer cancel()
-	if _, status, err := executeModel(ctx, credential{ID: "a", Provider: "codex"}, "m", nil, nil); status != 0 || err != timeout {
-		t.Fatalf("status=%d err=%v", status, err)
+	if _, err := executeModel(ctx, credential{ID: "a", Provider: "codex"}, "m", nil, nil); !errors.Is(err, timeout) || !errors.As(err, new(retryableError)) {
+		t.Fatalf("err=%v", err)
 	}
 }

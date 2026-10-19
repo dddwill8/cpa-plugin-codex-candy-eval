@@ -15,7 +15,8 @@ import (
 	"time"
 )
 
-// Each run sends detectionTarget challenges, at most that many at once per credential.
+// Each run sends detectionTarget challenges, at most that many at once per credential and
+// detectionGlobalConcurrency across credentials. A challenge holds its slot through its retries.
 const (
 	detectionTarget            = 3
 	detectionGlobalConcurrency = 6
@@ -152,7 +153,7 @@ func detectionRunResponse(body []byte) managementResponse {
 			appendDetectionResult(id, detectionResult{ID: fmt.Sprint(now.UnixNano()), Time: now, Model: req.Model, Status: "skipped", Error: unsupportedModelMessage})
 		},
 		func(auth credential) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(runCtx)
 			p := &detectionProgress{Model: req.Model, Phase: "collecting", Concurrency: req.Concurrency, cancel: cancel}
 			detectionRunning[auth.ID] = p
 			go runDetection(ctx, auth, req, p)
@@ -223,10 +224,13 @@ func runDetection(ctx context.Context, auth credential, req detectionRunRequest,
 		go func() {
 			defer workers.Done()
 			for i := range jobs {
-				if ctx.Err() != nil {
+				select {
+				case detectionSlots <- struct{}{}:
+				case <-ctx.Done():
 					return
 				}
 				sample, output, err := collectDetectionSample(ctx, auth, req.Model, challenges[i])
+				<-detectionSlots
 				if sample.Attempts > 0 {
 					events <- event{i, sample, output, err}
 				}
@@ -271,33 +275,38 @@ func runDetection(ctx context.Context, auth credential, req detectionRunRequest,
 	}
 }
 
+// collectDetectionSample asks challenge until an answer can be scored. The sample keeps the last answer.
 func collectDetectionSample(ctx context.Context, auth credential, model string, challenge detectionChallenge) (sample detectionSample, out modelResponse, err error) {
 	sample.detectionChallenge = challenge
-	body, headers := codexTurn(auth.ID, model, "", challenge.Instructions, challenge.Prompt)
-	out, sample.Attempts, err = executeProbe(ctx, auth, model, body, headers, detectionSlots)
+	out, sample.Attempts, err = askCodex(ctx, auth, model, "", challenge.Instructions, challenge.Prompt, challengeTimeout, func(answer string) (err error) {
+		sample.Text, sample.Parsed, err = detectionText(answer, challenge.ExpectedCount)
+		return err
+	})
+	sample.Valid = err == nil
 	if err != nil {
 		sample.Error = truncate(err.Error(), 500)
-		return
 	}
-	if len(out.Answer) > detectionMaxText {
-		sample.Error = "回答过长，本次未计入"
-		return
+	return
+}
+
+// detectionText returns the text of answer that detection scores and the count of its numbers, or why the
+// answer cannot be scored. Like upstream detection, only the requested count is scored when an answer runs
+// longer.
+func detectionText(answer string, expected int) (text string, parsed int, err error) {
+	if len(answer) > detectionMaxText {
+		return "", 0, errors.New("回答过长")
 	}
-	sample.Text = out.Answer
-	numbers := parseNumbers(sample.Text)
-	// Like upstream detection, score only the requested count when an answer runs longer.
-	if len(numbers) > challenge.ExpectedCount {
-		numbers = numbers[:challenge.ExpectedCount]
+	text, numbers := answer, parseNumbers(answer)
+	if len(numbers) > expected {
+		numbers = numbers[:expected]
 		values := make([]string, len(numbers))
 		for i, n := range numbers {
 			values[i] = strconv.Itoa(n)
 		}
-		sample.Text = strings.Join(values, ", ")
+		text = strings.Join(values, ", ")
 	}
-	sample.Parsed = len(numbers)
-	sample.Valid = sample.Parsed >= minimumNumbers(challenge.ExpectedCount)
-	if !sample.Valid {
-		sample.Error = "有效数字不足"
+	if len(numbers) < minimumNumbers(expected) {
+		err = errors.New("有效数字不足")
 	}
-	return
+	return text, len(numbers), err
 }

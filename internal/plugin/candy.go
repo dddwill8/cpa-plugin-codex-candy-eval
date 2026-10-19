@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -31,6 +32,7 @@ type candyResult struct {
 	OK              bool      `json:"ok"`
 	Answer          string    `json:"answer,omitempty"`
 	Error           string    `json:"error,omitempty"`
+	Attempts        int       `json:"attempts,omitempty"`
 	InputTokens     int64     `json:"input_tokens"`
 	OutputTokens    int64     `json:"output_tokens"`
 	ReasoningTokens int64     `json:"reasoning_tokens"`
@@ -68,12 +70,13 @@ func candyRunResponse(body []byte) managementResponse {
 		},
 		func(auth credential) {
 			candyRunning[auth.ID] = &candyProgress{Total: req.Runs}
-			go runCandy(auth, req.Model, req.Effort, req.Runs)
+			go runCandy(runCtx, auth, req.Model, req.Effort, req.Runs)
 		})
 }
 
-// Each credential runs serially; different credentials run in parallel.
-func runCandy(auth credential, model, effort string, runs int) {
+// Each credential runs serially; different credentials run in parallel. Stopping ctx drops the run it
+// interrupts.
+func runCandy(ctx context.Context, auth credential, model, effort string, runs int) {
 	id := auth.ID
 	defer tasks.Done()
 	defer func() {
@@ -82,13 +85,10 @@ func runCandy(auth credential, model, effort string, runs int) {
 		mu.Unlock()
 	}()
 	for range runs {
-		mu.Lock()
-		stopping := quiescing
-		mu.Unlock()
-		if stopping {
+		r := evaluateCandy(ctx, auth, model, effort)
+		if ctx.Err() != nil {
 			return
 		}
-		r := evaluateCandy(auth, model, effort)
 		mu.Lock()
 		candyResults[id] = appendRecent(candyResults[id], r)
 		candyRunning[id].Done++
@@ -97,10 +97,12 @@ func runCandy(auth credential, model, effort string, runs int) {
 	}
 }
 
-func evaluateCandy(auth credential, model, effort string) candyResult {
-	r := candyResult{Time: time.Now().UTC(), Model: model, Effort: effort}
-	out, elapsed, err := askCodex(auth, model, effort, candyPrompt)
-	r.DurationMS = elapsed.Milliseconds()
+// evaluateCandy grades one answer. A wrong answer is a result, so only failed requests are retried.
+func evaluateCandy(ctx context.Context, auth credential, model, effort string) candyResult {
+	started := time.Now()
+	r := candyResult{Time: started.UTC(), Model: model, Effort: effort}
+	out, attempts, err := askCodex(ctx, auth, model, effort, "", candyPrompt, answerTimeout, nil)
+	r.DurationMS, r.Attempts = time.Since(started).Milliseconds(), attempts
 	r.InputTokens, r.OutputTokens, r.ReasoningTokens = out.InputTokens, out.OutputTokens, out.ReasoningTokens
 	if err != nil {
 		r.Error = truncate(err.Error(), 500)

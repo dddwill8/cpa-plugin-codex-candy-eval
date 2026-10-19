@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -19,7 +20,7 @@ func setupTest(t *testing.T) {
 	previousCredentials := configuredCredentials
 	configuredCredentials = map[string]credential{}
 	previousHost, previousPath, previousLoaded := hostCall, statePath, loaded
-	previousLoadError, previousQuiescing := stateLoadError, quiescing
+	previousLoadError, previousRunCtx, previousStopRuns, previousRetryDelay := stateLoadError, runCtx, stopRuns, retryDelay
 	previousResults, previousRunning := candyResults, candyRunning
 	previousDetectionResults, previousDetectionRunning, previousStorageError := detectionResults, detectionRunning, storageError
 	previousPelicanResults, previousPelicanRunning := pelicanResults, pelicanRunning
@@ -28,14 +29,15 @@ func setupTest(t *testing.T) {
 		tasks.Wait()
 		configuredCredentials = previousCredentials
 		hostCall, statePath, loaded = previousHost, previousPath, previousLoaded
-		stateLoadError, quiescing = previousLoadError, previousQuiescing
+		stateLoadError, runCtx, stopRuns, retryDelay = previousLoadError, previousRunCtx, previousStopRuns, previousRetryDelay
 		candyResults, candyRunning = previousResults, previousRunning
 		detectionResults, detectionRunning, storageError = previousDetectionResults, previousDetectionRunning, previousStorageError
 		pelicanResults, pelicanRunning = previousPelicanResults, previousPelicanRunning
 		inspections = previousInspections
 	})
 	statePath, loaded = filepath.Join(t.TempDir(), "state.json"), false
-	stateLoadError, quiescing = nil, false
+	stateLoadError, retryDelay = nil, time.Millisecond
+	runCtx, stopRuns = context.WithCancel(context.Background())
 	candyResults, candyRunning = map[string][]candyResult{}, map[string]*candyProgress{}
 	detectionResults, detectionRunning, storageError = map[string][]detectionResult{}, map[string]*detectionProgress{}, ""
 	pelicanResults, pelicanRunning = map[string][]pelicanResult{}, map[string]bool{}
@@ -78,16 +80,16 @@ func TestEvaluate(t *testing.T) {
 		body, prompt = sentTurn(payload)
 		return mockModelResponse("答案是 21"), nil
 	})
-	r := evaluateCandy(credential{ID: "a", Provider: "claude"}, "m", "xhigh")
+	r := evaluateCandy(context.Background(), credential{ID: "a", Provider: "claude"}, "m", "xhigh")
 	if !r.OK || r.Answer != "答案是 21" || r.InputTokens != 12 || r.OutputTokens != 3 || r.ReasoningTokens != 1 ||
 		prompt != candyPrompt || body["reasoning"].(map[string]any)["effort"] != "xhigh" {
 		t.Fatalf("result = %+v, body = %v", r, body)
 	}
-	// Unsupported efforts stay as sent and fail the request; a failed request is never graded.
+	// Unsupported efforts stay as sent and fail the request, which is neither retried nor graded.
 	hostCall = func(string, any) (json.RawMessage, error) {
 		return nil, &EnvelopeError{Code: "unsupported_effort", Message: "21", HTTPStatus: 400}
 	}
-	if r := evaluateCandy(credential{ID: "a", Provider: "claude"}, "m", "xhigh"); r.OK || r.Error == "" {
+	if r := evaluateCandy(context.Background(), credential{ID: "a", Provider: "claude"}, "m", "xhigh"); r.OK || r.Error == "" || r.Attempts != 1 {
 		t.Fatalf("failed request result = %+v", r)
 	}
 }
@@ -287,7 +289,7 @@ func TestUnreadableStateIsPreserved(t *testing.T) {
 	}
 }
 
-func TestQuiesceDrainsBothTests(t *testing.T) {
+func TestQuiesceStopsTests(t *testing.T) {
 	setupTest(t)
 	gate, started := make(chan struct{}), make(chan struct{}, 3)
 	hostCall = streamHost(func(method string, _ any) (json.RawMessage, error) {
@@ -318,7 +320,7 @@ func TestQuiesceDrainsBothTests(t *testing.T) {
 	go func() { Quiesce(); close(stopped) }()
 	for deadline := time.Now().Add(time.Second); ; time.Sleep(time.Millisecond) {
 		mu.Lock()
-		stopping := quiescing
+		stopping := runCtx.Err() != nil
 		mu.Unlock()
 		if stopping {
 			break
@@ -338,11 +340,12 @@ func TestQuiesceDrainsBothTests(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("plugin did not finish in-flight tasks")
 	}
-	if len(candyResults["candy"]) != 1 || detectionResults["detection"][0].Status != "cancelled" {
-		t.Fatal("quiesce did not stop further collection")
+	// Abandoned requests leave no candy record; the detection keeps what it collected.
+	if len(candyResults["candy"]) != 0 || detectionResults["detection"][0].Status != "cancelled" {
+		t.Fatal("quiesce did not stop the tests")
 	}
 	HandleMethod("plugin.reconfigure", nil)
-	if quiescing {
+	if runCtx.Err() != nil {
 		t.Fatal("reconfiguration did not resume the plugin")
 	}
 }
