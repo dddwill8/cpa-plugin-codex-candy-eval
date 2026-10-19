@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Codex 降智测试</title>
-  <style>/*APP_STYLES*/</style>
+  <style>/*APP_STYLES*//*EXTEND_STYLES*/</style>
 </head>
 <body>
   <main>
@@ -29,6 +29,8 @@
           <button id="tab-candy" class="tab" role="tab" aria-selected="true" aria-controls="candy-panel" type="button">糖果题</button>
           <button id="tab-fingerprint" class="tab" role="tab" aria-selected="false" aria-controls="fingerprint-panel" tabindex="-1" type="button">指纹检测</button>
           <button id="tab-pelican" class="tab" role="tab" aria-selected="false" aria-controls="pelican-panel" tabindex="-1" type="button">画鹈鹕</button>
+          <!-- extend: health tab stays immediately after 画鹈鹕 -->
+          <button id="tab-health" class="tab" role="tab" aria-selected="false" aria-controls="health-panel" tabindex="-1" type="button">健康检测</button>
         </div>
         <div class="page-actions">
           <button id="clear-all" type="button" aria-label="清空全部测试记录" data-tip disabled><i data-icon="trash-2"></i></button>
@@ -50,7 +52,10 @@
           <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="candy-model"></select></span></label>
           <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="candy-effort"></select></span></label>
           <label class="field"><span class="field-label">每凭证次数</span><input id="candy-runs" class="mono" type="number" min="1" max="10" step="1" value="1" required></label>
-          <button id="candy-run-batch" class="btn" type="submit" disabled>测试全部</button>
+          <div class="toolbar-actions">
+            <button id="candy-one-click" class="btn ghost" type="button">一键测试</button>
+            <button id="candy-run-batch" class="btn" type="submit" disabled>测试全部</button>
+          </div>
         </form>
 
         <div class="legend">
@@ -79,7 +84,10 @@
         <form id="fingerprint-toolbar" class="card toolbar">
           <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="fingerprint-model"></select></span></label>
           <label class="field"><span class="field-label">每凭证并发</span><input id="fingerprint-concurrency" class="mono" type="number" min="1" step="1" required></label>
-          <button id="fingerprint-run-batch" class="btn" type="submit" disabled>测试全部</button>
+          <div class="toolbar-actions">
+            <button id="fingerprint-one-click" class="btn ghost" type="button">一键测试</button>
+            <button id="fingerprint-run-batch" class="btn" type="submit" disabled>测试全部</button>
+          </div>
         </form>
         <div class="legend"><span id="fingerprint-cost"></span></div>
         <section id="fingerprint-credentials" class="card"></section>
@@ -97,10 +105,23 @@
         <form id="pelican-toolbar" class="card toolbar">
           <label class="field"><span class="field-label">模型</span><span class="native-select"><select id="pelican-model"></select></span></label>
           <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pelican-effort"></select></span></label>
-          <button id="pelican-run-batch" class="btn" type="submit" disabled>测试全部</button>
+          <div class="toolbar-actions">
+            <button id="pelican-one-click" class="btn ghost" type="button">一键测试</button>
+            <button id="pelican-run-batch" class="btn" type="submit" disabled>测试全部</button>
+          </div>
         </form>
         <div class="legend"><span>每个凭证 1 次请求（失败或没有 HTML 时重试）</span></div>
         <section id="pelican-credentials" class="card"></section>
+      </section>
+      <!-- extend: health check is not one of the three graded tests -->
+      <section id="health-panel" role="tabpanel" aria-labelledby="tab-health" hidden>
+        <div class="panel-intro">
+          <p>对每张已启用凭证，用它的第一个模型发送一句 say hi。收到文本为通过，请求失败为不通过。</p>
+        </div>
+        <form id="health-toolbar" class="card toolbar">
+          <button id="health-run" class="btn" type="button">开始检测</button>
+        </form>
+        <section id="health-results" class="card"></section>
       </section>
     </div>
 
@@ -140,6 +161,7 @@
   <script>/*CANDY_SCRIPT*/</script>
   <script>/*FINGERPRINT_SCRIPT*/</script>
   <script>/*PELICAN_SCRIPT*/</script>
+  <script>/*EXTEND_SCRIPT*/</script>
   <script>/*APP_SCRIPT*/</script>
 </body>
 </html>

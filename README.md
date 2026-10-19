@@ -1,5 +1,23 @@
 # Codex 降智测试（CLIProxyAPI 插件）
 
+这是 [haowang02/cpa-plugin-codex-candy-eval](https://github.com/haowang02/cpa-plugin-codex-candy-eval) 的二开，版本 **v0.5.0**。上游的糖果题、指纹检测和画鹈鹕仍在，评分方式没有改。本仓库增加了下面三项。
+
+## 二开增加的功能
+
+### 模型列表只留别名
+
+糖果、指纹、鹈鹕三个模型选择框用同一份过滤后的列表。同一个模型已经有带 `/` 的名字时，不再放进不带前缀的原名。`grok-4.7` 和 `xai/grok-4.7` 同时存在时，列表里只留 `xai/grok-4.7`。没有任何前缀别名的裸名字继续保留，两个不同前缀也同时保留。指纹检测仍不列出带括号的型号。
+
+### 健康检测
+
+「画鹈鹕」右边有一页「健康检测」。它对每张已启用凭证，用该凭证过滤后的第一个模型发送一句 `say hi`。收到文本是通过，请求失败、超时或没有文本是不通过。这一页不跑糖果、指纹或鹈鹕，也不写入那三项的历史记录。整次检测会在页面请求超时前返回。
+
+### 一键测试
+
+糖果、指纹、鹈鹕每一页都有「一键测试」，只启动本页的测试。每张已启用凭证用自己的第一个模型，不用下拉框里的模型，也不看勾选了哪些行。糖果和鹈鹕带上该页当前的推理强度，糖果固定每个凭证 1 次。原来的「测试全部」仍使用下拉框模型和当前勾选。
+
+安装脚本和 [Releases](https://github.com/dddwill8/cpa-plugin-codex-candy-eval/releases/latest) 指向本仓库。当前发布提供 Linux amd64 插件。
+
 在 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 管理面板中用**糖果题**、**指纹检测**和**画鹈鹕**测试 Codex 凭证。
 
 ![example](docs/images/example.png)
@@ -19,16 +37,16 @@ CPA 管理面板（CPAMC 或 CPAMP）插件商店搜索安装 `cpa-codex-candy-e
 进入 CPA 工作目录，执行对应的安装命令。macOS 和 Linux：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/haowang02/cpa-plugin-codex-candy-eval/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dddwill8/cpa-plugin-codex-candy-eval/main/install.sh | sh
 ```
 
 Windows 请先停止 CPA，再在 PowerShell 中运行：
 
 ```powershell
-irm https://raw.githubusercontent.com/haowang02/cpa-plugin-codex-candy-eval/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/dddwill8/cpa-plugin-codex-candy-eval/main/install.ps1 | iex
 ```
 
-也可以从 [Releases](https://github.com/haowang02/cpa-plugin-codex-candy-eval/releases/latest) 下载对应平台的压缩包，解压后将插件文件重命名为 `cpa-codex-candy-eval-v<版本号>.<扩展名>`，放入对应的 `plugins/<系统>/<架构>/` 目录。
+也可以从 [Releases](https://github.com/dddwill8/cpa-plugin-codex-candy-eval/releases/latest) 下载对应平台的压缩包，解压后将插件文件重命名为 `cpa-codex-candy-eval-v<版本号>.<扩展名>`，放入对应的 `plugins/<系统>/<架构>/` 目录。
 
 在 CPA 的 `config.yaml` 中启用插件：
 
@@ -47,17 +65,21 @@ plugins:
 
 ### 糖果题
 
-选择模型、推理强度和每凭证次数，点击「测试」。推理强度选择 `none` 时由 CPA 决定。
+选择模型、推理强度和每凭证次数，点击「测试」。推理强度选择 `none` 时由 CPA 决定。「一键测试」忽略每凭证次数，每张已启用凭证用自己的第一个模型跑 1 次，并使用当前推理强度。
 
 正确答案为 **21**。展开凭证可查看历次回答，正确率按当前选择的模型和推理强度统计。
 
 ### 指纹检测
 
-选择模型，点击凭证旁的「测试」，或勾选凭证批量测试。插件从参考库的 36 道数字挑战中随机抽取 3 道，与参考库中的模型比对，显示最接近的模型、家族及归因概率。测试 gpt-6.1-sol 时命中 gpt-6-astra/6.1-sol，测试 deepseek-flash 时命中 deepseek-v4.1-flash-1017，均视为一致。展开凭证可查看历史记录和详情。
+选择模型，点击凭证旁的「测试」，或勾选凭证批量测试。「一键测试」对每张已启用凭证使用它自己的第一个不含括号的模型。插件从参考库的 36 道数字挑战中随机抽取 3 道，与参考库中的模型比对，显示最接近的模型、家族及归因概率。测试 gpt-6.1-sol 时命中 gpt-6-astra/6.1-sol，测试 deepseek-flash 时命中 deepseek-v4.1-flash-1017，均视为一致。展开凭证可查看历史记录和详情。
 
 ### 画鹈鹕
 
-选择模型和推理强度，点击「测试」。模型会写出一个用 SVG 绘制鹈鹕骑自行车动画的 HTML 页面。列表和历史记录显示动画的缩略画面，点击即可放大播放。
+选择模型和推理强度，点击「测试」。「一键测试」对每张已启用凭证使用它自己的第一个模型，并带上当前推理强度。模型会写出一个用 SVG 绘制鹈鹕骑自行车动画的 HTML 页面。列表和历史记录显示动画的缩略画面，点击即可放大播放。
+
+### 健康检测
+
+打开「画鹈鹕」右侧的「健康检测」，点击「开始检测」。每张已启用凭证用自己的第一个模型回答 `say hi`。有文本为通过，失败或超时为不通过。
 
 ### 记录与额度
 
@@ -74,7 +96,7 @@ plugins:
 也可以补全下面的提示词，发给 Codex、Claude Code 等 AI 助手，让它帮你部署：
 
 ```text
-请按照 https://raw.githubusercontent.com/haowang02/cpa-plugin-codex-candy-eval/main/docs/inspection.md 中的教程，在这台机器上部署 Codex 降智测试插件的定时巡检。
+请按照 https://raw.githubusercontent.com/dddwill8/cpa-plugin-codex-candy-eval/main/docs/inspection.md 中的教程，在这台机器上部署 Codex 降智测试插件的定时巡检。
 
 我的配置（没写的项保持脚本默认值）：
 - CPA 地址：

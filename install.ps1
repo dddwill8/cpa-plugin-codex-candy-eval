@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$repo = "haowang02/cpa-plugin-codex-candy-eval"
+$repo = "dddwill8/cpa-plugin-codex-candy-eval"
 $name = "cpa-codex-candy-eval"
 
 if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {

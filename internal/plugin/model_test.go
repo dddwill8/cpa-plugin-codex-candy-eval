@@ -27,10 +27,11 @@ func streamHost(host func(method string, payload any) (json.RawMessage, error)) 
 			id := payload.(map[string]any)["stream_id"].(string)
 			mu.Lock()
 			event, open := streams[id]
+			wait := closed[id]
 			delete(streams, id)
 			mu.Unlock()
 			if open && event == nil {
-				<-closed[id]
+				<-wait
 			}
 			return json.Marshal(map[string]any{"payload": event, "done": !open})
 		case "host.model.stream_close":

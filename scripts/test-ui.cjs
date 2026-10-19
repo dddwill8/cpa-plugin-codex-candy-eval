@@ -43,7 +43,7 @@ const context = vm.createContext({
     setItem(key, value) { if (storageBlocked) throw new Error('Storage unavailable'); storageWrites++; browserStorage.set(key, value); },
   },
 });
-let source = ['vendor/markdown-it.min.js', 'vendor/markdown-it-cjk-friendly.min.js', 'vendor/texmath.js', 'vendor/temml.min.js', 'credentials.js', 'catalog.js', 'components.js', 'candy.js', 'fingerprint.js', 'pelican.js', 'app.js']
+let source = ['vendor/markdown-it.min.js', 'vendor/markdown-it-cjk-friendly.min.js', 'vendor/texmath.js', 'vendor/temml.min.js', 'credentials.js', 'catalog.js', 'components.js', 'candy.js', 'fingerprint.js', 'pelican.js', 'extend.js', 'app.js']
   .map(file => webFile(file).split('// Events and initialization.')[0]).join('\n');
 source = source.replace('/*FINGERPRINT_CONFIG*/{}', JSON.stringify({requests:3,aliases:{'gpt-6.1-sol':'gpt-6-astra'}}));
 vm.runInContext(source, context);
@@ -136,6 +136,45 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.equal(element('candy-effort').value, 'high');
   run(`savePreference('candy-effort', 7); initializeCandy()`);
   assert.equal(element('candy-effort').value, 'low', 'saved values of the wrong type fall back');
+  const optionValues = (id) => [...element(id).innerHTML.matchAll(/value="([^"]*)"/g)].map((match) => match[1]);
+  const page = webFile('ui.html');
+  const afterPelican = page.indexOf('画鹈鹕</button>') + '画鹈鹕</button>'.length;
+  assert.equal(page.slice(afterPelican).match(/id="tab-([^"]+)"/)[1], 'health', '健康检测 sits immediately after 画鹈鹕');
+  for (const test of ['candy', 'fingerprint', 'pelican']) {
+    assert.match(page, new RegExp(`id="${test}-one-click"[^>]*type="button"[^>]*>一键测试</button>`));
+  }
+  assert.equal(page.includes('id="health-one-click"'), false);
+  element('candy-model').value = '';
+  element('fingerprint-model').value = '';
+  element('pelican-model').value = '';
+  run(`catalogCache.models = {time:Date.now(),ids:['grok-4.7','xai/grok-4.7','openai/grok-4.7','kept-bare','grok-4.7(high)','vendor/IMAGE-preview','Grok-4.7']}; fillModels()`);
+  const aliasOptions = optionValues('candy-model');
+  assert.deepEqual(aliasOptions, optionValues('pelican-model'));
+  assert.equal(aliasOptions.includes('grok-4.7'), false);
+  assert.equal(aliasOptions.includes('vendor/IMAGE-preview'), false);
+  for (const id of ['xai/grok-4.7', 'openai/grok-4.7', 'kept-bare', 'grok-4.7(high)', 'Grok-4.7']) assert.equal(aliasOptions.includes(id), true, id);
+  const fingerprintOptions = optionValues('fingerprint-model');
+  assert.equal(fingerprintOptions.includes('grok-4.7(high)'), false);
+  assert.equal(fingerprintOptions.includes('grok-4.7'), false);
+  assert.equal(fingerprintOptions.includes('xai/grok-4.7'), true);
+  assert.equal(fingerprintOptions.includes('kept-bare'), true);
+  assert.equal(element('candy-model').value === 'grok-4.7', false);
+  run(`var aliasPosted = false; api = async (path) => { if (String(path).endsWith('/run')) aliasPosted = true; return {started:0}; }`);
+  await run(`startTest('candy', {credential_ids:['a'], model:'grok-4.7', effort:'low', runs:4})`);
+  assert.equal(run(`aliasPosted`), false, 'a filtered bare id is not submitted');
+  assert.equal(run(`EXTEND.firstModel(['grok-4.7','xai/grok-4.7'], false)`), 'xai/grok-4.7');
+  assert.equal(run(`EXTEND.firstModel(['kept-bare'], false)`), 'kept-bare');
+  assert.equal(run(`EXTEND.firstModel(['grok-4.7','xai/grok-4.7','openai/grok-4.7'], false)`), 'openai/grok-4.7');
+  assert.equal(run(`EXTEND.firstModel(['codex-auto-review(high)','claude-sonnet'], true)`), 'claude-sonnet');
+  run(`bindTabs()`);
+  element('tab-pelican').listeners.keydown({ key: 'ArrowRight', preventDefault() {} });
+  assert.equal(element('tab-health')['aria-selected'], true);
+  assert.equal(element('health-panel').hidden, false);
+  assert.equal(element('pelican-panel').hidden, true);
+  element('tab-health').listeners.keydown({ key: 'ArrowRight', preventDefault() {} });
+  assert.equal(element('tab-candy')['aria-selected'], true);
+  element('tab-candy').listeners.keydown({ key: 'End', preventDefault() {} });
+  assert.equal(element('tab-health')['aria-selected'], true);
   assert.equal(run(`availableCredential({running:{test:'fingerprint'}})`), false);
   assert.equal(run(`fmtPercent(0.12345)`), '12.3%');
   assert.equal(run(`fingerprintConcurrency()`), 3);
@@ -481,6 +520,68 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   element('app').hidden = true;
   assert.equal(run(`fmtPercent(undefined)`), '—');
   assert(!run(`fingerprintResultHTML({status:'completed',model:'test',attribution:{prediction:'test',prediction_name:'test',probability:0.5,used_outputs:1,results:null}})`).includes('NaN'));
+  element('candy-effort').value = 'high';
+  element('pelican-effort').value = 'medium';
+  element('candy-runs').value = '4';
+  element('candy-model').value = 'kept-bare';
+  run(`refreshCatalog = async () => {};
+    credentials = [
+      {id:'on',name:'On',disabled:false,source:'auth_files',provider:'codex',candies:[],fingerprints:[],pelicans:[]},
+      {id:'off',name:'Off',disabled:true,source:'auth_files',provider:'codex',candies:[],fingerprints:[],pelicans:[]},
+      {id:'down',name:'Down',disabled:false,unavailable:true,source:'auth_files',provider:'codex',candies:[],fingerprints:[],pelicans:[]},
+      {id:'busy',name:'Busy',disabled:false,running:{test:'candy'},source:'auth_files',provider:'codex',candies:[],fingerprints:[],pelicans:[]},
+      {id:'paren',name:'Paren',disabled:false,source:'auth_files',provider:'codex',candies:[],fingerprints:[],pelicans:[]}
+    ];
+    var extendCalls = [];
+    var extendCatalogs = {
+      on:['grok-4.7','xai/grok-4.7'], off:['xai/grok-4.7'], down:['kept-bare'], busy:['xai/grok-4.7'], paren:['codex-auto-review(high)','claude-sonnet']
+    };
+    api = async (path, options = {}) => {
+      if (String(path).includes('/auth-files/models')) {
+        const name = decodeURIComponent(String(path).split('name=')[1]);
+        return {models:(extendCatalogs[name] || []).map((id) => ({id}))};
+      }
+      extendCalls.push([path, options.body]);
+      if (String(path).endsWith('/health/run')) return {results:[{credential_id:'on',model:'xai/grok-4.7',passed:true,text:'hi'},{credential_id:'paren',passed:false,error:'没有可用模型'}]};
+      return {started:1};
+    }`);
+  run(`EXTEND.wire()`);
+  const posted = async (id) => {
+    run(`extendCalls = []`);
+    await element(id).listeners.click();
+    return plain(run(`extendCalls`)).filter((call) => !String(call[0]).includes('/auth-files/models'));
+  };
+  const candyPosts = await posted('candy-one-click');
+  assert.equal(candyPosts.length, 1);
+  assert.equal(String(candyPosts[0][0]).endsWith('/candy/one-click'), true);
+  assert.equal(candyPosts[0][1].model, undefined);
+  assert.equal(candyPosts[0][1].runs, undefined);
+  assert.equal(candyPosts[0][1].effort, 'high');
+  assert.deepEqual(candyPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
+  assert.equal(run(`EXTEND.firstModel(extendCalls[0][1].model_catalog.on, false)`), 'xai/grok-4.7');
+  assert.equal(run(`EXTEND.firstModel(extendCalls[0][1].model_catalog.paren, false)`), 'codex-auto-review(high)');
+  assert.equal(run(`EXTEND.firstModel(extendCalls[0][1].model_catalog.paren, true)`), 'claude-sonnet');
+  const fingerprintPosts = await posted('fingerprint-one-click');
+  assert.equal(fingerprintPosts.length, 1);
+  assert.equal(String(fingerprintPosts[0][0]).endsWith('/fingerprint/one-click'), true);
+  assert.equal(fingerprintPosts[0][1].effort, undefined);
+  assert.equal(fingerprintPosts[0][1].runs, undefined);
+  assert.equal(fingerprintPosts[0][1].model, undefined);
+  assert.deepEqual(fingerprintPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
+  const pelicanPosts = await posted('pelican-one-click');
+  assert.equal(pelicanPosts.length, 1);
+  assert.equal(String(pelicanPosts[0][0]).endsWith('/pelican/one-click'), true);
+  assert.equal(pelicanPosts[0][1].effort, 'medium');
+  assert.equal(pelicanPosts[0][1].runs, undefined);
+  assert.equal(pelicanPosts[0][1].model, undefined);
+  const healthPosts = await posted('health-run');
+  assert.equal(healthPosts.length, 1);
+  assert.equal(String(healthPosts[0][0]).endsWith('/health/run'), true);
+  assert.deepEqual(healthPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
+  const healthHTML = element('health-results').innerHTML;
+  assert.match(healthHTML, /verdict ok[\s\S]*?通过/);
+  assert.match(healthHTML, /verdict bad[\s\S]*?不通过/);
+  assert.equal(healthHTML.includes('credential_id'), false);
   run(`candySelected.add('a'); fingerprintSelected.add('a'); fingerprintExpanded.add('a'); showLogin('Expired')`);
   assert.equal(run(`credentials.length + candySelected.size + fingerprintSelected.size + fingerprintExpanded.size`), 0);
   assert.equal(element('app').hidden, true);

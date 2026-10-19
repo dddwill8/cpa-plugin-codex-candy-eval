@@ -99,8 +99,16 @@ function preference(name, fallback) {
 function savePreference(name, value) {
   store(VIEW_STORE + name, value);
 }
+// Fork seam (web/extend.js). Absent EXTEND keeps the upstream catalog and tabs.
+function listedModels(ids) {
+  return globalThis.EXTEND?.listedModels ? EXTEND.listedModels(ids) : ids;
+}
+function tabOrder() {
+  const extra = globalThis.EXTEND?.tabs || [];
+  return [...TESTS, ...extra.filter((name) => !TESTS.includes(name))];
+}
 function fillModels() {
-  const ids = [...new Set(catalogCache.models?.ids || [])].sort(compareModels);
+  const ids = [...new Set(listedModels(catalogCache.models?.ids || []))].sort(compareModels);
   const unsuffixed = ids.filter((id) => !/[()]/.test(id));
   for (const [id, models] of [["candy-model", ids], ["fingerprint-model", unsuffixed], ["pelican-model", ids]]) {
     fillSelect(id, models, $(id).value || preference(id, DEFAULT_MODEL), DEFAULT_MODEL);
@@ -272,7 +280,7 @@ function startTest(test, body) {
     await refreshCatalog();
     fillModels();
     setNotice("catalog-error", "");
-    if (!catalogCache.models?.ids.includes(body.model)) throw new Error("所选模型已不在模型列表中，请重新选择。");
+    if (!listedModels(catalogCache.models?.ids || []).includes(body.model)) throw new Error("所选模型已不在模型列表中，请重新选择。");
     const response = await api(`${BASE}/${test}/run`, { method: "POST", body: { ...body, model_catalog: await modelCatalog(body.credential_ids) } });
     const messages = [`已为 ${response.started || 0} 个凭证开始测试`];
     if (response.skipped) messages.push(`${response.skipped} 个凭证不支持所选模型，已跳过`);
@@ -322,7 +330,7 @@ function setMasked(masked) {
   }
 }
 function switchTab(name) {
-  for (const test of TESTS) {
+  for (const test of tabOrder()) {
     const active = name === test;
     $("tab-" + test).setAttribute("aria-selected", active);
     $("tab-" + test).tabIndex = active ? 0 : -1;
@@ -330,6 +338,18 @@ function switchTab(name) {
   }
   hideTip();
   savePreference("tab", name);
+}
+function bindTabs() {
+  for (const name of tabOrder()) {
+    $("tab-" + name).addEventListener("click", () => switchTab(name));
+    $("tab-" + name).addEventListener("keydown", (e) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+      e.preventDefault();
+      const tabs = tabOrder();
+      const next = e.key === "Home" ? tabs[0] : e.key === "End" ? tabs.at(-1) : tabs[(tabs.indexOf(name) + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+      switchTab(next); $("tab-" + next).focus();
+    });
+  }
 }
 const busyTest = (a) => TEST_LABELS[a.running?.test] || "";
 const credentialBusy = (a) => !!a.running;
@@ -521,17 +541,9 @@ $("login-form").addEventListener("submit", (e) => {
   start();
 });
 
-for (const name of TESTS) {
-  $("tab-" + name).addEventListener("click", () => switchTab(name));
-  $("tab-" + name).addEventListener("keydown", (e) => {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
-    e.preventDefault();
-    const next = e.key === "Home" ? TESTS[0] : e.key === "End" ? TESTS.at(-1) : TESTS[(TESTS.indexOf(name) + (e.key === "ArrowRight" ? 1 : -1) + TESTS.length) % TESTS.length];
-    switchTab(next); $("tab-" + next).focus();
-  });
-}
+bindTabs();
 const savedTab = preference("tab", "candy");
-switchTab(TESTS.includes(savedTab) ? savedTab : "candy");
+switchTab(tabOrder().includes(savedTab) ? savedTab : "candy");
 
 for (const [test, selection, submit] of [["candy", candySelected, runCandy], ["fingerprint", fingerprintSelected, runFingerprint], ["pelican", pelicanSelected, runPelican]]) {
   // Each test keeps its own settings, saved by control after the control normalizes its value.
@@ -556,6 +568,7 @@ for (const [test, selection, submit] of [["candy", candySelected, runCandy], ["f
     render();
   });
 }
+globalThis.EXTEND?.wire?.();
 key = panelKey();
 if (!key) { try { key = sessionStorage.getItem(KEY_STORE) || ""; } catch (_) {} }
 key ? start() : showLogin("");

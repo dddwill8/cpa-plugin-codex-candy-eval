@@ -27,7 +27,7 @@
 
 ```sh
 mkdir -p ~/cpa-inspection
-curl -fsSL -o ~/cpa-inspection/inspection.py https://raw.githubusercontent.com/haowang02/cpa-plugin-codex-candy-eval/main/examples/inspection.py
+curl -fsSL -o ~/cpa-inspection/inspection.py https://raw.githubusercontent.com/dddwill8/cpa-plugin-codex-candy-eval/main/examples/inspection.py
 chmod 600 ~/cpa-inspection/inspection.py
 ```
 

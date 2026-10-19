@@ -22,6 +22,7 @@ func setupTest(t *testing.T) {
 	previousLoadError, previousStorageError := stateLoadError, storageError
 	previousRecords, previousRunning, previousInspections := records, running, inspections
 	previousRunCtx, previousStopRuns, previousRetryDelay := runCtx, stopRuns, retryDelay
+	previousHealthBudget := healthProbeBudget
 	t.Cleanup(func() {
 		tasks.Wait()
 		configuredCredentials = previousCredentials
@@ -29,6 +30,7 @@ func setupTest(t *testing.T) {
 		stateLoadError, storageError = previousLoadError, previousStorageError
 		records, running, inspections = previousRecords, previousRunning, previousInspections
 		runCtx, stopRuns, retryDelay = previousRunCtx, previousStopRuns, previousRetryDelay
+		healthProbeBudget = previousHealthBudget
 	})
 	configuredCredentials = map[string]credential{}
 	statePath, loaded = filepath.Join(t.TempDir(), "state.json"), false

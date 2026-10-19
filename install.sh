@@ -2,7 +2,7 @@
 # Install the latest release into ./plugins/<os>/<arch>. Run it in the CLIProxyAPI working directory.
 set -eu
 
-repo="haowang02/cpa-plugin-codex-candy-eval"
+repo="dddwill8/cpa-plugin-codex-candy-eval"
 name="cpa-codex-candy-eval"
 
 fail() {
