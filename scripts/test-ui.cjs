@@ -540,12 +540,15 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
     ];
     var extendCalls = [];
     var extendCatalogs = {
-      on:['grok-4.7','xai/grok-4.7'], off:['xai/grok-4.7'], down:['kept-bare'], busy:['xai/grok-4.7'], paren:['codex-auto-review(high)','claude-sonnet']
+      on:['old-model','xai/grok-4.7'], off:['xai/grok-4.7'], down:['kept-bare'], busy:['xai/grok-4.7'], paren:['codex-auto-review(high)','claude-sonnet']
     };
+    var healthModelReads = {};
     api = async (path, options = {}) => {
       if (String(path).includes('/auth-files/models')) {
         const name = decodeURIComponent(String(path).split('name=')[1]);
-        return {models:(extendCatalogs[name] || []).map((id) => ({id}))};
+        healthModelReads[name] = (healthModelReads[name] || 0) + 1;
+        const ids = name === 'on' && healthModelReads.on > 1 ? ['xai/grok-4.7'] : (extendCatalogs[name] || []);
+        return {models:ids.map((id) => ({id}))};
       }
       extendCalls.push([path, options.body]);
       if (String(path).endsWith('/health/run')) {
@@ -560,7 +563,8 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   for (const name of ['On', 'Off', 'Down', 'Busy', 'Paren']) assert.equal(healthList.includes(name), true, name + ' is listed before the check');
   assert.equal(healthList.includes('未检测'), true);
   assert.equal(healthList.includes('health-error'), false);
-  assert.equal(run(`healthChoice.get('on')`), 'xai/grok-4.7');
+  assert.equal(run(`healthModelIDs('on').includes('old-model')`), true);
+  run(`setHealthModel('on', 'old-model')`);
   assert.equal(run(`healthChoice.get('paren')`), 'codex-auto-review(high)');
   run(`setHealthModel('paren', 'claude-sonnet')`);
   assert.equal(element('health-results').innerHTML.includes('value="claude-sonnet" selected'), true);
@@ -597,6 +601,7 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.equal(String(healthPosts[0][0]).endsWith('/health/run'), true);
   assert.deepEqual(healthPosts[0][1].credential_ids, ['on', 'down', 'busy', 'paren']);
   assert.equal(healthPosts[0][1].models.on, 'xai/grok-4.7');
+  assert.equal(healthPosts[0][1].model_catalog.on.includes('old-model'), false);
   assert.equal(healthPosts[0][1].models.paren, 'claude-sonnet');
   assert.equal(healthPosts[0][1].all_models, false);
   assert.equal(healthPosts[0][1].models.off, undefined);
@@ -617,6 +622,15 @@ const stableID = (kind, parts) => kind + ':' + crypto.createHash('sha256').updat
   assert.match(allHTML, /kept-bare/);
   assert.match(allHTML, /第二个模型失败/);
   assert.match(allHTML, /不通过 1\/2/);
+  const savedHealth = run(`stored('cpa-codex-candy-eval.health.v1')`);
+  assert.equal(savedHealth.results.some((result) => result.credential_id === 'on' && result.passed), true);
+  run(`healthResults = []; renderHealth()`);
+  assert.equal(element('health-results').innerHTML.includes('通过'), false);
+  run(`restoreHealthResults(); renderHealth()`);
+  assert.match(element('health-results').innerHTML, /通过/);
+  const healthCSS = webFile('extend.css');
+  assert.match(healthCSS, /--health-columns:\s*minmax\(0, 1\.4fr\) minmax\(180px, 1fr\) 148px/);
+  assert.match(healthCSS, /\.health-row, \.health-model-line \{[^}]*grid-template-columns:\s*var\(--health-columns\)/);
   assert.equal(healthHTML.includes('credential_id'), false);
   run(`candySelected.add('a'); fingerprintSelected.add('a'); fingerprintExpanded.add('a'); showLogin('Expired')`);
   assert.equal(run(`credentials.length + candySelected.size + fingerprintSelected.size + fingerprintExpanded.size`), 0);

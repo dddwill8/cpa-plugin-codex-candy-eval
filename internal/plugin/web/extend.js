@@ -59,20 +59,45 @@ function startOneClick(test) {
   });
 }
 
-let healthResults = [];
+var healthResults = [];
 var healthChoice = new Map();
 const healthOpen = new Set();
 let healthCatalogs = {};
 let healthCatalogStamp = "";
 var healthCatalogTask = Promise.resolve();
+const HEALTH_STORE = "cpa-codex-candy-eval.health.v1";
 
 function healthModelIDs(id) {
   return listedModelIDs(healthCatalogs?.[id] || []).sort(compareModels);
 }
 
-function ensureHealthCatalogs() {
+function forgetCredentialModels(ids) {
+  for (const id of ids) {
+    delete catalogCache.credentials[id];
+    catalogFailures.delete(id);
+    catalogRequests.delete(id);
+  }
+}
+
+function saveHealthResults() {
+  const results = healthResults.map((result) => ({
+    credential_id: result.credential_id,
+    model: result.model || "",
+    passed: !!result.passed,
+    error: result.error || "",
+  }));
+  store(HEALTH_STORE, { owner: catalogCache.owner || "", results });
+}
+
+function restoreHealthResults() {
+  const saved = stored(HEALTH_STORE);
+  if (!saved || saved.owner !== (catalogCache.owner || "") || !Array.isArray(saved.results)) return;
+  healthResults = saved.results.filter((result) => result && typeof result.credential_id === "string");
+}
+
+function loadHealthCatalogs(force) {
   const stamp = credentials.map((credential) => credential.id).join("\0");
-  if (stamp === healthCatalogStamp) return;
+  if (!force && stamp === healthCatalogStamp) return healthCatalogTask;
   healthCatalogStamp = stamp;
   const ids = credentials.map((credential) => credential.id);
   healthCatalogTask = (async () => {
@@ -81,6 +106,7 @@ function ensureHealthCatalogs() {
         healthCatalogs = {};
         return;
       }
+      if (force) forgetCredentialModels(ids);
       const raw = await modelCatalog(ids);
       if (credentials.map((credential) => credential.id).join("\0") !== stamp) return;
       healthCatalogs = raw || {};
@@ -90,6 +116,7 @@ function ensureHealthCatalogs() {
       if (err instanceof AuthError) showLogin(err.message);
     }
   })();
+  return healthCatalogTask;
 }
 
 function healthStatus(result) {
@@ -125,7 +152,7 @@ function healthRow(credential) {
 function renderHealth() {
   const root = $("health-results");
   if (!root) return;
-  ensureHealthCatalogs();
+  loadHealthCatalogs(false);
   const html = credentials.length ? credentials.map(healthRow).join("") : `<div class="empty">没有凭证。</div>`;
   if (root.healthHTML !== html) {
     root.healthHTML = html;
@@ -150,13 +177,15 @@ function setHealthModel(id, model) {
 function startHealth(allModels) {
   return update("健康检测失败", async () => {
     const ids = enabledCredentials().map((credential) => credential.id);
-    const catalog = await modelCatalog(ids);
+    await loadHealthCatalogs(true);
+    const catalog = {};
     const models = {};
     let jobs = 0;
     for (const id of ids) {
-      const available = listedModelIDs(catalog?.[id] || []).sort(compareModels);
+      catalog[id] = healthCatalogs[id] || [];
+      const available = healthModelIDs(id);
       jobs += Math.max(available.length, 1);
-      const choice = healthChoice.get(id) || available[0] || "";
+      const choice = available.includes(healthChoice.get(id)) ? healthChoice.get(id) : (available[0] || "");
       if (choice) models[id] = choice;
     }
     const timeout = allModels ? Math.min(10 * 60 * 1000, Math.max(60000, Math.ceil(jobs / 4) * 25000)) : 30000;
@@ -166,6 +195,7 @@ function startHealth(allModels) {
       body: { credential_ids: ids, model_catalog: catalog, models, all_models: !!allModels },
     });
     healthResults = Array.isArray(response.results) ? response.results : [];
+    saveHealthResults();
     const passed = healthResults.filter((result) => result.passed).length;
     setNotice("flash", `检测完成：${passed} 个通过，${healthResults.length - passed} 个不通过`, passed === healthResults.length ? "info" : "warning");
     renderHealth();
@@ -198,6 +228,17 @@ function wireExtend() {
     healthCatalogs = {};
     healthCatalogStamp = "";
     return upstreamShowLogin(message);
+  };
+  const upstreamStart = start;
+  start = async function startWithHealth() {
+    await upstreamStart();
+    restoreHealthResults();
+    renderHealth();
+  };
+  const upstreamSwitchTab = switchTab;
+  switchTab = function switchTabWithHealth(name) {
+    upstreamSwitchTab(name);
+    if (name === "health") loadHealthCatalogs(true);
   };
   for (const test of ["candy", "fingerprint", "pelican"]) {
     $(test + "-one-click").addEventListener("click", () => startOneClick(test));

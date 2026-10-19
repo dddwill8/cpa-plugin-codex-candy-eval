@@ -144,7 +144,7 @@ async function credentialModels(id) {
     try {
       const data = await api("/v0/management/auth-files/models?name=" + encodeURIComponent(id));
       const ids = modelIDs(data.models);
-      if (cache !== catalogCache || signature !== credentialSignature(id)) return null;
+      if (cache !== catalogCache || signature !== credentialSignature(id) || catalogRequests.get(id) !== request) return null;
       cache.credentials[id] = { time: Date.now(), ids, signature };
       catalogFailures.delete(id);
       return ids;
