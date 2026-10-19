@@ -9,10 +9,10 @@ import (
 
 func TestCodexPrefixMatchesCapturedThread(t *testing.T) {
 	var thread uuid
-	raw, _ := hex.DecodeString(strings.ReplaceAll("01a1062a-f13e-7d92-8bbf-14512276dc3e", "-", ""))
+	raw, _ := hex.DecodeString(strings.ReplaceAll("01a152e2-654d-7e50-8c11-f55f17d42b98", "-", ""))
 	copy(thread[:], raw)
 	prefix := codexPrefix(thread)
-	if prefix[0].ID != "at_d7b9f801-e7d7-5396-a0de-11a7ae0dc033" || prefix[1].ID != "msg_fbcd7b80-1e9d-55e5-ad1e-992e8accac69" {
+	if prefix[0].ID != "at_e223b652-6670-5575-bae9-4a24ffc36fb5" || prefix[1].ID != "msg_5610970c-beaa-524d-8bb6-7985bec433b0" {
 		t.Fatalf("prefix IDs = %s, %s", prefix[0].ID, prefix[1].ID)
 	}
 }

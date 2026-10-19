@@ -13,11 +13,11 @@ import (
 	"time"
 )
 
-// A Codex turn is the first request of a new codex-tui 0.160.0 thread on Responses Lite.
+// A Codex turn is the first request of a new codex-tui 0.163.0 thread on Responses Lite.
 // data/codex_context.json holds that client's tools, base instructions and turn context, taken
-// from a captured request with the machine's paths replaced by /home/user/workspace.
+// from a request captured on Linux with the machine's paths replaced by /home/user/workspace.
 const (
-	codexUserAgent   = "codex-tui/0.160.0 (Ubuntu 26.4.0; aarch64) ghostty/1.3.1 (codex-tui; 0.160.0)"
+	codexUserAgent   = "codex-tui/0.163.0 (Debian 13.0.0; x86_64) xterm-ghostty (codex-tui; 0.163.0)"
 	codexEnvironment = `<environment_context>
   <cwd>/home/user/workspace</cwd>
   <shell>bash</shell>
@@ -91,12 +91,12 @@ type codexClientMetadata struct {
 
 type codexRequest struct {
 	Model             string              `json:"model"`
+	Stream            bool                `json:"stream"`
 	Input             []codexItem         `json:"input"`
 	ToolChoice        string              `json:"tool_choice"`
 	ParallelToolCalls bool                `json:"parallel_tool_calls"`
 	Reasoning         codexReasoning      `json:"reasoning"`
 	Store             bool                `json:"store"`
-	Stream            bool                `json:"stream"`
 	Include           []string            `json:"include"`
 	PromptCacheKey    string              `json:"prompt_cache_key"`
 	Text              map[string]string   `json:"text"`
@@ -113,6 +113,7 @@ type codexTurnMetadata struct {
 	WindowNumber               int    `json:"window_number"`
 	ContextWindowID            string `json:"context_window_id"`
 	RequestKind                string `json:"request_kind"`
+	HistoryInitialization      string `json:"history_initialization"`
 	RootTurnID                 string `json:"root_turn_id"`
 	ThreadSource               string `json:"thread_source"`
 	TurnTrigger                string `json:"turn_trigger"`
@@ -141,9 +142,9 @@ func codexTurn(authID, model, effort, instructions, prompt string) (codexRequest
 	metadata, _ := json.Marshal(codexTurnMetadata{
 		InstallationID: installationID, SessionID: threadID, ThreadID: threadID, AgentName: "/root",
 		TurnID: turnID, WindowID: windowID, ContextWindowID: uuidV7().String(), RequestKind: "turn",
-		RootTurnID: turnID, ThreadSource: "user", TurnTrigger: "user", Sandbox: "seccomp", SandboxMode: "workspace-write",
-		AutoReviewEnabled: true, NodeReplAutoReviewRequired: true, TurnStartedAtUnixMS: now.UnixMilli(),
-		AnalyticsEnabled: true, Model: model, ReasoningEffort: effort,
+		HistoryInitialization: "new", RootTurnID: turnID, ThreadSource: "user", TurnTrigger: "user",
+		Sandbox: "seccomp", SandboxMode: "workspace-write", AutoReviewEnabled: true, NodeReplAutoReviewRequired: true,
+		TurnStartedAtUnixMS: now.UnixMilli(), AnalyticsEnabled: true, Model: model, ReasoningEffort: effort,
 	})
 	created := float64(now.UnixMicro()) / 1e6
 	input := codexPrefix(thread)
